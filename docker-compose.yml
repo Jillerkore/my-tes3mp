@@ -42,6 +42,9 @@ services:
       TES3MP_PASSWORD: ${TES3MP_PASSWORD:-}
       TES3MP_LOG_LEVEL: ${TES3MP_LOG_LEVEL:-1}
       TES3MP_MASTER_ENABLED: ${TES3MP_MASTER_ENABLED:-false}
+      # Game rules, applied on top of scripts/config.lua on every start.
+      TES3MP_PROGRESSION: ${TES3MP_PROGRESSION:-separate}
+      TES3MP_STRONGHOLD_HELPER: ${TES3MP_STRONGHOLD_HELPER:-true}
 
     volumes:
       # Everything the server changes or that you may want to edit: the world

@@ -104,9 +104,72 @@ apply.
 | `TES3MP_MAX_PLAYERS` | `16` | |
 | `TES3MP_PASSWORD` | *(none)* | Players must pass `--password` to join |
 | `TES3MP_MASTER_ENABLED` | `false` | `true` lists the server in the public TES3MP browser |
+| `TES3MP_PROGRESSION` | `separate` | `separate`, `shared` or `custom` — see [Playing together, separately](#playing-together-separately) |
+| `TES3MP_STRONGHOLD_HELPER` | `true` | Lets every player build his own Great House stronghold |
 | `TES3MP_LOG_LEVEL` | `1` | 0 verbose … 4 fatal only |
 | `TES3MP_IMAGE` | `my-tes3mp-server:0.8.1` | A registry image to run instead of building; fetch it with `docker compose pull` |
 | `MORROWIND_DATA` | *(auto-detected)* | Path to Morrowind's `Data Files` (client only) |
+
+## Playing together, separately
+
+Stock TES3MP treats everyone on a server as one party: a quest one player
+finishes is finished for all, and joining a faction joins everybody. This
+server defaults to the opposite, `TES3MP_PROGRESSION=separate`:
+
+| Each player's own | One world for everyone |
+| --- | --- |
+| Journal and quest progress, including the main quest | Who is alive and who is dead |
+| Faction membership, ranks and reputation (so different Great Houses) | What is in a container or lying on the floor |
+| Dialogue topics, reputation, bounty, map | Doors, levers, buildings |
+| Kill counts | Time and weather |
+| Inventory, gold, skills, level (always, in every mode) | |
+
+The right-hand column is what you still have to be considerate about. If your
+brother kills a quest-giver, he is dead in your game too until that cell is
+reset. A moderator can reset a cell by name from the in-game chat, which
+brings its inhabitants and loot back:
+
+```
+/resetcell "Balmora, Caius Cosades' House"
+```
+
+Resetting a cell also removes anything players left lying in it, so do not
+reset somewhere you store things. To make yourselves moderators, see
+[Admin rights](#admin-rights).
+
+Set `TES3MP_PROGRESSION=shared` for stock party-style play, or `custom` to
+control every `config.share*` option yourself in `scripts/config.lua`.
+
+### Strongholds
+
+With separate progression each player can join a different Great House and
+earn its stronghold. Two things about how the game builds them are worth
+knowing:
+
+- Morrowind raises all three strongholds together. When the first of you
+  builds, the other two sites go up too, held by rival nobles — that is the
+  original game's behaviour, not a bug.
+- The original construction timers only work for the first builder and die
+  when their owner logs out. The bundled helper
+  ([`strongholds.lua`](docker/custom/myTes3mp/strongholds.lua)) keeps the wait
+  on the server instead: five in-game days per phase, or no wait at all for a
+  phase the world has already reached.
+
+One character can still only join one Great House, as in the original game.
+
+### Admin rights
+
+Staff rank lives in each character's save file. Once a character exists and
+is logged out, set `"staffRank"` to `2` (admin) or `1` (moderator) in its
+file, then restart:
+
+```bash
+./my-tes3mp shell nano data/player/yourname.json
+./my-tes3mp restart
+```
+
+Useful once you have it: `/tpto <name>` to join your brother, `/resetcell`,
+`/setdifficulty`, and `/help` for the rest.
 
 ## Host it somewhere else
 
@@ -167,6 +230,12 @@ edit the server's `config.lua`, then restart:
 Extra server scripts go in `/data/scripts/custom/` and are switched on in
 `/data/scripts/customScripts.lua`. Your edits survive restarts and image
 rebuilds; the server never overwrites files that already exist in the volume.
+The one exception is `scripts/custom/myTes3mp/`, which holds this project's
+own scripts and is rewritten from `.env` on every start.
+
+The game rules come from the maintained `0.8.1` branch of CoreScripts, pinned
+to a commit in `docker/Dockerfile`, rather than the 2022 snapshot inside the
+TES3MP release.
 
 ## Troubleshooting
 
@@ -207,7 +276,8 @@ and checks that data survives a restart. Pushes to `main` and `v*` tags also
 publish the image to `ghcr.io/<owner>/my-tes3mp`.
 
 To move to a newer TES3MP release, update the version, URL and checksum at
-the top of `docker/Dockerfile` (server) and `scripts/lib.sh` (client).
+the top of `docker/Dockerfile` (server, plus the CoreScripts commit) and
+`scripts/lib.sh` (client).
 
 If you fork this, replace `Jillerkore/my-tes3mp` in this README, in
 `install.sh` and in the image label in `docker/Dockerfile`.

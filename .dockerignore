@@ -1,9 +1,10 @@
-# The image needs exactly one file from this repository (docker/entrypoint.sh);
-# everything else it contains is downloaded and checksummed during the build.
+# The image needs only docker/entrypoint.sh and the Lua scripts in
+# docker/custom/ from this repository; everything else it contains is
+# downloaded and verified during the build.
 #
 # So instead of listing what to leave out (.git, .env with its password,
 # .runtime/, backups/, *.tar.gz, game data ...), ignore everything and allow
-# that one file back in. The build context stays a few kilobytes no matter
+# just those back in. The build context stays a few kilobytes no matter
 # what accumulates in the checkout - which also keeps `my-tes3mp deploy` fast,
 # since it sends the context over SSH.
 #
@@ -12,3 +13,4 @@
 !docker/
 docker/*
 !docker/entrypoint.sh
+!docker/custom/

@@ -14,7 +14,12 @@
 #   /data/scripts/            CoreScripts Lua; edit scripts/config.lua for game
 #                             rules, drop your own scripts into scripts/custom/
 #   /data/lib/                Lua libraries used by the scripts
-#   /data/.tes3mp-version     TES3MP version that scripts/ was seeded from
+#   /data/scripts/custom/myTes3mp/
+#                             managed by this script: replaced from the image
+#                             and regenerated from the environment on every
+#                             start (see "Game rules" below)
+#   /data/.tes3mp-version     TES3MP version and CoreScripts revision that
+#                             scripts/ was seeded from
 #
 # Seeding. Each of data/, scripts/, lib/ and the cfg is copied from the
 # pristine copy inside the image only if it does not exist yet. Nothing that
@@ -41,6 +46,20 @@
 #   TES3MP_LOG_LEVEL       -> [General] logLevel           (default: 1)
 #   TES3MP_MASTER_ENABLED  -> [MasterServer] enabled       (default: false)
 #   (fixed)                -> [General] port = 25565, [Plugins] home = /data
+#
+# Game rules. CoreScripts keeps its rules in scripts/config.lua, which is
+# yours to edit. Two things are layered on top without touching that file, as
+# a small script in scripts/custom/myTes3mp/ that is loaded after it:
+#
+#   TES3MP_PROGRESSION        separate (default): every player has his own
+#                             journal, quests, faction ranks, reputation,
+#                             dialogue topics, bounty, map and kill counts.
+#                             shared: quests and factions progress for the
+#                             whole party at once (CoreScripts' stock values).
+#                             custom: leave scripts/config.lua in charge.
+#   TES3MP_STRONGHOLD_HELPER  true (default): let every player build his own
+#                             Great House stronghold; see
+#                             docker/custom/myTes3mp/strongholds.lua.
 
 set -Eeuo pipefail
 
@@ -50,6 +69,11 @@ readonly CFG_FILE=$DATA_DIR/tes3mp-server.cfg
 readonly VERSION_STAMP=$DATA_DIR/.tes3mp-version
 readonly SERVER_PORT=25565
 readonly IMAGE_VERSION=${TES3MP_VERSION:-unknown}
+# What scripts/ is seeded from: the TES3MP release plus the CoreScripts commit.
+readonly SCRIPTS_VERSION="$IMAGE_VERSION+${CORESCRIPTS_COMMIT:-bundled}"
+readonly MANAGED_SRC=$INSTALL_DIR/my-tes3mp/custom/myTes3mp
+readonly MANAGED_DIR=$DATA_DIR/scripts/custom/myTes3mp
+readonly MANAGED_REQUIRE='require("custom/myTes3mp/init")'
 
 log()  { printf '[my-tes3mp] %s\n' "$*"; }
 warn() { printf '[my-tes3mp] WARNING: %s\n' "$*" >&2; }
@@ -102,6 +126,22 @@ load_settings() {
         true | yes | on | 1) MASTER_ENABLED=true ;;
         false | no | off | 0 | '') MASTER_ENABLED=false ;;
         *) die "TES3MP_MASTER_ENABLED must be true or false (got '$master')" ;;
+    esac
+
+    PROGRESSION=$(trim "${TES3MP_PROGRESSION:-}")
+    PROGRESSION=${PROGRESSION,,}
+    PROGRESSION=${PROGRESSION:-separate}
+    case $PROGRESSION in
+        separate | shared | custom) ;;
+        *) die "TES3MP_PROGRESSION must be separate, shared or custom (got '$PROGRESSION')" ;;
+    esac
+
+    local helper
+    helper=$(trim "${TES3MP_STRONGHOLD_HELPER:-}")
+    case ${helper,,} in
+        true | yes | on | 1 | '') STRONGHOLD_HELPER=true ;;
+        false | no | off | 0) STRONGHOLD_HELPER=false ;;
+        *) die "TES3MP_STRONGHOLD_HELPER must be true or false (got '$helper')" ;;
     esac
 }
 
@@ -161,7 +201,7 @@ seed_data() {
     seed_dir data || true
     seed_dir lib || true
     if seed_dir scripts; then
-        printf '%s\n' "$IMAGE_VERSION" >"$VERSION_STAMP"
+        printf '%s\n' "$SCRIPTS_VERSION" >"$VERSION_STAMP"
     fi
     seed_cfg
 
@@ -172,10 +212,89 @@ seed_data() {
     if [[ -r $VERSION_STAMP ]]; then
         seeded_version=$(<"$VERSION_STAMP")
     fi
-    if [[ -n $seeded_version && $seeded_version != "$IMAGE_VERSION" ]]; then
-        warn "$DATA_DIR/scripts was seeded by TES3MP $seeded_version but this image is TES3MP $IMAGE_VERSION."
+    if [[ -n $seeded_version && $seeded_version != "$SCRIPTS_VERSION" ]]; then
+        warn "$DATA_DIR/scripts was seeded from $seeded_version but this image carries $SCRIPTS_VERSION."
         warn "Existing scripts are never overwritten. To take the new ones, move $DATA_DIR/scripts and"
         warn "$DATA_DIR/lib away (e.g. to scripts.old, lib.old), restart, then re-apply your changes."
+    fi
+}
+
+# ---- Game rules ---------------------------------------------------------------
+
+# One `config.<name> = <value>` line per sharing option, for settings.lua.
+# The option names are CoreScripts' own (scripts/config.lua).
+sharing_lines() {
+    local value=$1 option
+    for option in shareJournal shareFactionRanks shareFactionExpulsion \
+        shareFactionReputation shareTopics shareBounty shareReputation \
+        shareMapExploration shareVideos shareKills; do
+        printf 'config.%s = %s\n' "$option" "$value"
+    done
+}
+
+# Install the managed scripts into the volume and point CoreScripts at them.
+# Everything under MANAGED_DIR is replaced on every start, so it always
+# matches the image and the environment; nothing else in scripts/ is touched
+# except for one `require` line appended to customScripts.lua if it is absent.
+install_managed_scripts() {
+    local custom_dir=$DATA_DIR/scripts/custom
+    local loader=$DATA_DIR/scripts/customScripts.lua
+    local staging=$custom_dir/.myTes3mp.staging
+
+    mkdir -p "$custom_dir"
+    rm -rf "$staging"
+    cp -r "$MANAGED_SRC" "$staging"
+
+    {
+        printf '%s\n' \
+            "-- Generated by my-tes3mp on every start from the container's environment." \
+            "-- Do not edit: change TES3MP_PROGRESSION / TES3MP_STRONGHOLD_HELPER in .env." \
+            "--" \
+            "-- This runs after scripts/config.lua, so the values here win." \
+            ""
+        case $PROGRESSION in
+            separate)
+                printf '%s\n' "-- TES3MP_PROGRESSION=separate: nothing about a character is shared."
+                sharing_lines false
+                ;;
+            shared)
+                printf '%s\n' "-- TES3MP_PROGRESSION=shared: CoreScripts' stock party-style sharing."
+                printf '%s\n' \
+                    "config.shareJournal = true" \
+                    "config.shareFactionRanks = true" \
+                    "config.shareFactionExpulsion = false" \
+                    "config.shareFactionReputation = true" \
+                    "config.shareTopics = true" \
+                    "config.shareBounty = false" \
+                    "config.shareReputation = true" \
+                    "config.shareMapExploration = false" \
+                    "config.shareVideos = true" \
+                    "config.shareKills = true"
+                ;;
+            custom)
+                printf '%s\n' "-- TES3MP_PROGRESSION=custom: scripts/config.lua decides."
+                ;;
+        esac
+        printf '\nreturn {\n    progression = "%s",\n    strongholdHelper = %s\n}\n' \
+            "$PROGRESSION" "$STRONGHOLD_HELPER"
+    } >"$staging/settings.lua"
+
+    rm -rf "$MANAGED_DIR"
+    mv "$staging" "$MANAGED_DIR"
+
+    if [[ ! -e $loader ]]; then
+        printf '%s\n' "$MANAGED_REQUIRE" >"$loader"
+    elif ! grep -qF -- "$MANAGED_REQUIRE" "$loader"; then
+        printf '\n-- Added by my-tes3mp: game rules from the environment (see custom/myTes3mp/init.lua).\n%s\n' \
+            "$MANAGED_REQUIRE" >>"$loader"
+        log "Added the my-tes3mp loader line to $loader"
+    fi
+
+    # Per-player kill counts need a CoreScripts new enough to know the option.
+    if [[ $PROGRESSION == separate ]] &&
+        ! grep -q 'shareKills' "$DATA_DIR/scripts/config.lua" 2>/dev/null; then
+        warn "The scripts in $DATA_DIR/scripts predate per-player kill counts (config.shareKills),"
+        warn "so kills stay shared between players. See 'Upgrades' at the top of this script."
     fi
 }
 
@@ -287,12 +406,13 @@ run_server() {
     manage Plugins home "$DATA_DIR"
     manage MasterServer enabled "$MASTER_ENABLED"
     render_cfg
+    install_managed_scripts
 
     local password_state='no password'
     if [[ -n $PASSWORD ]]; then
         password_state='password set'
     fi
-    log "Starting TES3MP $IMAGE_VERSION: name \"$SERVER_NAME\", up to $MAX_PLAYERS players, $password_state, public listing $MASTER_ENABLED"
+    log "Starting TES3MP $IMAGE_VERSION: name \"$SERVER_NAME\", up to $MAX_PLAYERS players, $password_state, public listing $MASTER_ENABLED, $PROGRESSION progression"
 
     # The release bundles the Boost version it was built against.
     export LD_LIBRARY_PATH=$INSTALL_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}

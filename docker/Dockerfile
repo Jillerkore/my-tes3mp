@@ -32,6 +32,15 @@ ARG TES3MP_TARBALL_URL=https://github.com/TES3MP/TES3MP/releases/download/tes3mp
 ARG TES3MP_TARBALL_FALLBACK_URL=https://api.github.com/repos/TES3MP/TES3MP/releases/assets/64397879
 ARG TES3MP_TARBALL_SHA256=106a56e32a00ff7a92b574fae0e25671e90a199f509b16d483a8d7da6fc3bcf0
 
+# CoreScripts: the Lua that implements the game rules. The release tarball
+# carries a snapshot from May 2022; upstream has kept fixing the 0.8.1 branch
+# since (among other things it gained per-player kill counts,
+# config.shareKills). Pinned by commit: git verifies the content against the
+# hash, so no separate checksum is needed. To update, pick a newer commit from
+# https://github.com/TES3MP/CoreScripts/commits/0.8.1
+ARG CORESCRIPTS_REPO=https://github.com/TES3MP/CoreScripts.git
+ARG CORESCRIPTS_COMMIT=3e397a11eaf7d0d4ff08df4bb9925e67748b4db8
+
 
 # ---- Stage 1: download, verify and trim the release --------------------------
 FROM ${DEBIAN_IMAGE} AS fetch
@@ -39,6 +48,8 @@ FROM ${DEBIAN_IMAGE} AS fetch
 ARG TES3MP_TARBALL_URL
 ARG TES3MP_TARBALL_FALLBACK_URL
 ARG TES3MP_TARBALL_SHA256
+ARG CORESCRIPTS_REPO
+ARG CORESCRIPTS_COMMIT
 # Build-time only (an ARG, not an ENV): keeps apt from asking questions.
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -49,7 +60,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # the build the day that happens.
 # hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl git \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp/tes3mp
@@ -78,6 +89,24 @@ else
 fi
 EOF
 
+# Fetch exactly the pinned CoreScripts commit (GitHub serves any commit by its
+# full hash). A retry loop covers the same kind of hiccup as above.
+RUN <<'EOF'
+git init --quiet corescripts
+cd corescripts
+git remote add origin "${CORESCRIPTS_REPO}"
+for attempt in 1 2 3 4; do
+    if git fetch --quiet --depth 1 origin "${CORESCRIPTS_COMMIT}"; then
+        break
+    fi
+    [ "$attempt" -lt 4 ] || { echo "Could not fetch CoreScripts ${CORESCRIPTS_COMMIT}" >&2; exit 1; }
+    sleep 5
+done
+git checkout --quiet FETCH_HEAD
+test "$(git rev-parse HEAD)" = "${CORESCRIPTS_COMMIT}"
+rm -rf .git
+EOF
+
 # Keep only what a dedicated server needs. The release tarball also carries
 # client-side leftovers (GUI layouts, shaders, a controller database, build
 # directories, CoreScripts' .git) that the server never opens.
@@ -96,10 +125,11 @@ cp -a "$src/tes3mp-server.x86_64" "$src/lib" "$src/tes3mp-server-default.cfg" "$
 # must match.
 cp -a "$src/resources/version" "$dst/resources/"
 
-# Pristine CoreScripts (the Lua that implements the game rules). This copy is
-# never used directly; the entrypoint seeds /data from it.
-cp -a "$src/server/data" "$src/server/scripts" "$src/server/lib" \
-      "$src/server/LICENSE" "$src/server/README.md" "$dst/server/"
+# Pristine CoreScripts, from the pinned commit fetched above rather than the
+# older snapshot inside the tarball. This copy is never used directly; the
+# entrypoint seeds /data from it.
+cs=corescripts
+cp -a "$cs/data" "$cs/scripts" "$cs/lib" "$cs/LICENSE" "$cs/README.md" "$dst/server/"
 
 # Licensing. TES3MP is GPLv3, so the image carries the licence text, the
 # credits and the complete corresponding source that upstream ships inside the
@@ -128,6 +158,7 @@ ARG DEBIAN_IMAGE
 ARG TES3MP_VERSION
 ARG TES3MP_TARBALL_URL
 ARG TES3MP_TARBALL_SHA256
+ARG CORESCRIPTS_COMMIT
 
 # The server runs as this unprivileged user. 1000 is the first regular user on
 # most Linux hosts, which keeps bind mounts convenient; named volumes work with
@@ -147,6 +178,7 @@ LABEL org.opencontainers.image.title="my-tes3mp-server" \
       tes3mp.version="${TES3MP_VERSION}" \
       tes3mp.release.url="${TES3MP_TARBALL_URL}" \
       tes3mp.release.sha256="${TES3MP_TARBALL_SHA256}" \
+      tes3mp.corescripts.commit="${CORESCRIPTS_COMMIT}" \
       tes3mp.source="/opt/tes3mp/source.tar.gz (in this image); upstream: https://github.com/TES3MP/TES3MP/tree/tes3mp-${TES3MP_VERSION}"
 
 # Runtime dependencies:
@@ -175,6 +207,9 @@ RUN groupadd --gid "${TES3MP_GID}" tes3mp \
 
 COPY --from=fetch /opt/tes3mp /opt/tes3mp
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+# Scripts my-tes3mp adds on top of CoreScripts; the entrypoint installs them
+# into /data/scripts/custom/myTes3mp/ on every start.
+COPY docker/custom /opt/tes3mp/my-tes3mp/custom
 
 # Fail the build - not the first start - if the binary cannot find a library.
 RUN LD_LIBRARY_PATH=/opt/tes3mp/lib ldd /opt/tes3mp/tes3mp-server.x86_64 > /tmp/ldd.txt \
@@ -182,6 +217,7 @@ RUN LD_LIBRARY_PATH=/opt/tes3mp/lib ldd /opt/tes3mp/tes3mp-server.x86_64 > /tmp/
  && rm /tmp/ldd.txt
 
 ENV TES3MP_VERSION=${TES3MP_VERSION} \
+    CORESCRIPTS_COMMIT=${CORESCRIPTS_COMMIT} \
     HOME=/home/tes3mp
 
 # Numeric, so runtimes that insist on a provably non-root user can check it.
