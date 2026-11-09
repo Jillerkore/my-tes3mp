@@ -106,6 +106,9 @@ apply.
 | `TES3MP_MASTER_ENABLED` | `false` | `true` lists the server in the public TES3MP browser |
 | `TES3MP_PROGRESSION` | `separate` | `separate`, `shared` or `custom` — see [Playing together, separately](#playing-together-separately) |
 | `TES3MP_STRONGHOLD_HELPER` | `true` | Lets every player build his own Great House stronghold |
+| `TES3MP_CELL_RESET_HOURS` | `4` | Real hours until a visited cell is put back to its original state; `0` = never — see [The world heals](#the-world-heals) |
+| `TES3MP_CELL_RESET_KEEP` | *(none)* | More cells that never reset: names or parts of names, separated by `;` |
+| `TES3MP_DAY_MINUTES` | `10` | Real minutes per in-game day (stock TES3MP: about 45); `0` = leave alone |
 | `TES3MP_LOG_LEVEL` | `1` | 0 verbose … 4 fatal only |
 | `TES3MP_IMAGE` | `my-tes3mp-server:0.8.1` | A registry image to run instead of building; fetch it with `docker compose pull` |
 | `MORROWIND_DATA` | *(auto-detected)* | Path to Morrowind's `Data Files` (client only) |
@@ -124,18 +127,32 @@ server defaults to the opposite, `TES3MP_PROGRESSION=separate`:
 | Kill counts | Time and weather |
 | Inventory, gold, skills, level (always, in every mode) | |
 
-The right-hand column is what you still have to be considerate about. If your
-brother kills a quest-giver, he is dead in your game too until that cell is
-reset. A moderator can reset a cell by name from the in-game chat, which
-brings its inhabitants and loot back:
+The right-hand column would make separate playthroughs awkward — your
+brother kills a quest-giver and he is dead in your game too — so the world
+also heals itself.
 
-```
-/resetcell "Balmora, Caius Cosades' House"
-```
+### The world heals
 
-Resetting a cell also removes anything players left lying in it, so do not
-reset somewhere you store things. To make yourselves moderators, see
-[Admin rights](#admin-rights).
+Four real hours (`TES3MP_CELL_RESET_HOURS`) after a cell is first visited, and
+once nobody is in it, the server puts it back the way the game shipped: its
+people alive, its loot back, its doors locked. A cell is one interior, or one
+square of the outdoor map. The next visit starts the clock again.
+
+Some places never reset:
+
+- **The three Great House strongholds**, inside and out.
+- **Wherever you keep things.** Put items into any container by hand and the
+  whole cell around it is left alone for as long as that container holds
+  anything at all. Empty it completely and the cell goes back to resetting.
+- **Anything you name** in `TES3MP_CELL_RESET_KEEP`, for example
+  `Balmora, Caius Cosades' House; Vivec, Arena`.
+
+What a reset does remove is anything left lying on the floor of a cell that is
+not on that list. Store things in a container, not on a table.
+
+In game, `/resetinfo` says what will happen to the cell you are standing in. A
+moderator can reset a cell immediately with `/resetcell "Cell Name"`; to make
+yourselves moderators, see [Admin rights](#admin-rights).
 
 Set `TES3MP_PROGRESSION=shared` for stock party-style play, or `custom` to
 control every `config.share*` option yourself in `scripts/config.lua`.
@@ -152,8 +169,9 @@ knowing:
 - The original construction timers only work for the first builder and die
   when their owner logs out. The bundled helper
   ([`strongholds.lua`](docker/custom/myTes3mp/strongholds.lua)) keeps the wait
-  on the server instead: five in-game days per phase, or no wait at all for a
-  phase the world has already reached.
+  on the server instead: five in-game days per phase (under an hour at the
+  default day length), or no wait at all for a phase the world has already
+  reached.
 
 One character can still only join one Great House, as in the original game.
 

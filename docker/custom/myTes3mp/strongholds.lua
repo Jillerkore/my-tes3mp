@@ -260,7 +260,11 @@ end)
 local checkTimerId
 
 function MyTes3mpStrongholdTick()
-    strongholds.CheckAll()
+    -- Whatever goes wrong in one look, the next one must still happen.
+    local ok, problem = pcall(strongholds.CheckAll)
+    if not ok then
+        tes3mp.LogMessage(enumerations.log.ERROR, "[my-tes3mp strongholds] Check failed: " .. tostring(problem))
+    end
     tes3mp.RestartTimer(checkTimerId, time.seconds(60))
 end
 

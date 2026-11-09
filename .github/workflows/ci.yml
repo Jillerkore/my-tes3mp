@@ -34,6 +34,8 @@ jobs:
           docker compose exec -T server grep -q 'config.shareJournal = false' scripts/custom/myTes3mp/settings.lua
           docker compose exec -T server grep -q 'shareKills' scripts/config.lua
           docker compose logs --no-color | grep -q 'strongholds\] Loaded'
+          docker compose logs --no-color | grep -q 'resets\] Loaded'
+          docker compose logs --no-color | grep -q 'One in-game day lasts 10 real minutes'
           ! docker compose logs --no-color | grep -iE 'stack traceback|attempt to (call|index)'
       - name: Data survives a restart
         run: |
