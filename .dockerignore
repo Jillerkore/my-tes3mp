@@ -1,0 +1,14 @@
+# The image needs exactly one file from this repository (docker/entrypoint.sh);
+# everything else it contains is downloaded and checksummed during the build.
+#
+# So instead of listing what to leave out (.git, .env with its password,
+# .runtime/, backups/, *.tar.gz, game data ...), ignore everything and allow
+# that one file back in. The build context stays a few kilobytes no matter
+# what accumulates in the checkout - which also keeps `my-tes3mp deploy` fast,
+# since it sends the context over SSH.
+#
+# (The Dockerfile itself is always sent, ignored or not.)
+*
+!docker/
+docker/*
+!docker/entrypoint.sh

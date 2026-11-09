@@ -1,0 +1,19 @@
+# Local settings (may contain the server password)
+.env
+
+# Downloaded TES3MP client and other generated runtime files
+.runtime/
+
+# World/character snapshots made by `./my-tes3mp backup`
+backups/
+
+# Never commit game data or release archives. Morrowind's files are
+# copyrighted and must come from each player's own copy of the game.
+*.esm
+*.esp
+*.bsa
+*.tar.gz
+*.zip
+
+*.log
+.DS_Store

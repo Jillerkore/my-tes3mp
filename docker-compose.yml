@@ -1,0 +1,76 @@
+# TES3MP dedicated server.
+#
+#   docker compose up -d --wait     start (builds the image on first use) and
+#                                   return once the server answers players
+#   docker compose logs -f          follow the server log
+#   docker compose down             stop; the world stays in the volume
+#
+# Settings come from .env next to this file - copy .env.example to get started.
+# Every variable has a default, so it also runs with no .env at all.
+
+# A fixed project name keeps the volume name (my-tes3mp_tes3mp-data) the same
+# no matter what the checkout directory is called.
+name: my-tes3mp
+
+services:
+  server:
+    # The default name exists only on this machine: the first `up` finds no
+    # such image and builds it from docker/Dockerfile.
+    #
+    # To run a published image instead, set TES3MP_IMAGE to it (for example
+    # ghcr.io/<owner>/my-tes3mp:latest) and fetch it with `docker compose pull`.
+    # Recent compose versions also try to pull a missing image before falling
+    # back to a build, but `up --build` always builds locally and merely tags
+    # the result with that name.
+    image: ${TES3MP_IMAGE:-my-tes3mp-server:0.8.1}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: my-tes3mp-server
+    restart: unless-stopped
+
+    ports:
+      # TES3MP is UDP only. The container always listens on 25565; change the
+      # host side with TES3MP_PORT.
+      - "${TES3MP_PORT:-25565}:25565/udp"
+
+    environment:
+      # Written into /data/tes3mp-server.cfg on every start by
+      # docker/entrypoint.sh. Keep these defaults in sync with that script.
+      TES3MP_SERVER_NAME: ${TES3MP_SERVER_NAME:-my-tes3mp}
+      TES3MP_MAX_PLAYERS: ${TES3MP_MAX_PLAYERS:-16}
+      TES3MP_PASSWORD: ${TES3MP_PASSWORD:-}
+      TES3MP_LOG_LEVEL: ${TES3MP_LOG_LEVEL:-1}
+      TES3MP_MASTER_ENABLED: ${TES3MP_MASTER_ENABLED:-false}
+
+    volumes:
+      # Everything the server changes or that you may want to edit: the world
+      # and characters (data/), the Lua scripts (scripts/, lib/) and the
+      # server config. See docker/entrypoint.sh for the layout.
+      - tes3mp-data:/data
+
+    # No `init: true` and no `healthcheck:` here on purpose - the image brings
+    # its own init (tini) and its own HEALTHCHECK, so it behaves the same under
+    # plain `docker run`. The healthcheck is what `up --wait` waits for.
+
+    # On SIGTERM the server shuts down cleanly: within a second normally, but
+    # after up to ~13 s with TES3MP_MASTER_ENABLED=true, because it first waits
+    # for its master-server announcer to wake from a 10 s sleep ([MasterServer]
+    # rate in the cfg). Docker's default grace period is 10 s; leave room.
+    stop_grace_period: 30s
+
+    # An internet-facing game server needs no privileges at all.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # The server logs to stdout; keep that from growing without bound.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  tes3mp-data:

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck
+        run: shellcheck my-tes3mp install.sh scripts/*.sh docker/*.sh
+      - name: Compose file is valid
+        run: docker compose config --quiet
+
+  server:
+    name: Build image and boot the server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the server and wait until it is healthy
+        run: docker compose up -d --build --wait
+      - name: Server is listening on UDP 25565
+        run: |
+          docker compose ps
+          sudo ss -lun | grep -q ':25565 '
+      - name: Data survives a restart
+        run: |
+          docker compose exec -T server sh -c 'echo ci > /data/.ci-marker'
+          docker compose down
+          docker compose up -d --wait
+          docker compose exec -T server test -f /data/.ci-marker
+      - name: Logs
+        if: always()
+        run: docker compose logs --no-color
+      - name: Stop
+        if: always()
+        run: docker compose down -v

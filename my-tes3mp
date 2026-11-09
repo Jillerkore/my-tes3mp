@@ -1,0 +1,278 @@
+#!/usr/bin/env bash
+#
+# my-tes3mp — host a TES3MP (Morrowind multiplayer) server and play on it.
+#
+#   ./my-tes3mp              start the server (Docker) and connect to it
+#   ./my-tes3mp join HOST    connect to somebody else's server
+#   ./my-tes3mp deploy HOST  put the server on another machine over SSH
+#
+# Run `./my-tes3mp help` for everything else.
+
+set -euo pipefail
+
+# --- locate the repo (works from any cwd and through symlinks) ---------------
+SOURCE=${BASH_SOURCE[0]}
+while [ -L "$SOURCE" ]; do
+  DIR=$(cd -P "$(dirname "$SOURCE")" && pwd)
+  SOURCE=$(readlink "$SOURCE")
+  [[ $SOURCE != /* ]] && SOURCE=$DIR/$SOURCE
+done
+ROOT=$(cd -P "$(dirname "$SOURCE")" && pwd)
+readonly ROOT
+readonly CONTAINER=my-tes3mp-server
+# Keep in sync with the `image:` default in docker-compose.yml.
+readonly DEFAULT_IMAGE=my-tes3mp-server:0.8.1
+
+# --- shared helpers ----------------------------------------------------------
+# step / warn / die for output, and `setting KEY [DEFAULT]`, which reads a
+# value from the environment, else from .env (parsed, never sourced).
+MY_TES3MP_ROOT=$ROOT
+# shellcheck source=scripts/lib.sh
+. "$ROOT/scripts/lib.sh"
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  B=$'\033[1m' D=$'\033[2m' N=$'\033[0m'
+else
+  B='' D='' N=''
+fi
+
+# --- docker ------------------------------------------------------------------
+need_docker() {
+  command -v docker >/dev/null 2>&1 ||
+    die "docker is not installed — see https://docs.docker.com/engine/install/"
+  docker compose version >/dev/null 2>&1 ||
+    die "the docker compose plugin is missing — see https://docs.docker.com/compose/install/"
+  docker info >/dev/null 2>&1 ||
+    die "cannot talk to the docker daemon (is it running, and are you in the 'docker' group?)"
+}
+
+compose() {
+  docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" "$@"
+}
+
+server_running() {
+  [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = true ]
+}
+
+container_exists() {
+  docker inspect "$CONTAINER" >/dev/null 2>&1
+}
+
+# --- commands ----------------------------------------------------------------
+cmd_host() {
+  need_docker
+  if server_running; then
+    step "Server is already running"
+  else
+    step "Starting the TES3MP server"
+  fi
+  # With the default (local-only) image name, build it ourselves when it is
+  # missing. Otherwise compose first tries to pull that name from a registry
+  # and prints a confusing "access denied" before falling back to a build.
+  if [ -z "$(setting TES3MP_IMAGE)" ] &&
+    ! docker image inspect "$DEFAULT_IMAGE" >/dev/null 2>&1; then
+    step "Building the server image (first run only, about a minute)"
+    compose build
+  fi
+  # --wait blocks until the container's healthcheck passes, i.e. the server
+  # is really accepting players. It is a no-op when already up and healthy.
+  if ! compose up -d --wait "$@"; then
+    compose logs --tail 40 || true
+    die "the server did not come up — logs above"
+  fi
+  print_addresses
+}
+
+print_addresses() {
+  local port ip
+  port=$(setting TES3MP_PORT 25565)
+  printf '\n%sServer is up.%s Players connect to:\n' "$B" "$N"
+  printf '    this machine   %slocalhost:%s%s\n' "$B" "$port" "$N"
+  if command -v hostname >/dev/null 2>&1; then
+    for ip in $(hostname -I 2>/dev/null || true); do
+      # skip docker bridges and IPv6; show real LAN addresses only
+      case $ip in 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | *:*) continue ;; esac
+      printf '    your network   %s%s:%s%s\n' "$B" "$ip" "$port" "$N"
+    done
+  fi
+  printf '%s    (internet players need UDP port %s forwarded to this machine)%s\n\n' "$D" "$port" "$N"
+}
+
+cmd_play() {
+  # Set the client up first so a missing Morrowind install fails before we
+  # bother starting a server.
+  "$ROOT/scripts/client-setup.sh" --quiet
+  cmd_host
+  local port password
+  port=$(setting TES3MP_PORT 25565)
+  password=$(setting TES3MP_PASSWORD)
+  # The local server's password comes from .env, so you are not asked for it.
+  if [ -n "$password" ]; then
+    set -- "localhost:$port" --password "$password" "$@"
+  else
+    set -- "localhost:$port" "$@"
+  fi
+  step "Launching Morrowind — connecting to localhost:$port"
+  printf '%sThe server keeps running after you quit the game. Stop it with: ./my-tes3mp stop%s\n' "$D" "$N"
+  # exec, so that Ctrl-C or a kill aimed at this command reaches the game.
+  exec "$ROOT/scripts/client-play.sh" "$@"
+}
+
+cmd_join() {
+  [ $# -ge 1 ] || die "usage: my-tes3mp join HOST[:PORT] [--password PW]"
+  exec "$ROOT/scripts/client-play.sh" "$@"
+}
+
+cmd_stop() {
+  need_docker
+  step "Stopping the server (world and characters are kept)"
+  compose down "$@"
+}
+
+cmd_restart() {
+  need_docker
+  compose restart "$@"
+  compose up -d --wait
+  print_addresses
+}
+
+cmd_update() {
+  need_docker
+  step "Rebuilding the image and restarting"
+  compose build --pull
+  compose up -d --wait
+  print_addresses
+}
+
+cmd_status() {
+  need_docker
+  if ! container_exists; then
+    echo "Server is not running. Start it with: ./my-tes3mp host"
+    return 0
+  fi
+  compose ps
+  if server_running; then print_addresses; fi
+}
+
+cmd_logs() {
+  need_docker
+  compose logs "$@"
+}
+
+cmd_shell() {
+  need_docker
+  server_running || die "the server is not running — start it with: ./my-tes3mp host"
+  compose exec server "${@:-bash}"
+}
+
+cmd_backup() {
+  need_docker
+  # A stopped server has no container; create one (without starting it) so
+  # there is something to copy the volume out of.
+  container_exists || compose create >/dev/null
+  local out=${1:-$ROOT/backups/my-tes3mp-$(date +%Y%m%d-%H%M%S).tar.gz}
+  mkdir -p "$(dirname "$out")"
+  # `docker cp` streams a tar of /data and works whether or not the server
+  # is running.
+  docker cp "$CONTAINER:/data" - | gzip >"$out.partial"
+  mv "$out.partial" "$out"
+  step "Saved $(du -h "$out" | cut -f1) to $out"
+}
+
+cmd_restore() {
+  need_docker
+  local file=${1:-}
+  [ -n "$file" ] || die "usage: my-tes3mp restore BACKUP.tar.gz"
+  [ -f "$file" ] || die "no such file: $file"
+  gzip -t "$file" 2>/dev/null || die "$file is not a valid .tar.gz"
+  container_exists || compose create >/dev/null
+  if [ "${MY_TES3MP_YES:-}" != 1 ]; then
+    printf 'This replaces the current world and all characters with %s.\nContinue? [y/N] ' "$file"
+    local answer
+    read -r answer
+    [[ $answer == [yY]* ]] || die "aborted"
+  fi
+  local was_running=false
+  if server_running; then
+    was_running=true
+    compose stop
+  fi
+  step "Saving the current state first, in case you change your mind"
+  cmd_backup "$ROOT/backups/before-restore-$(date +%Y%m%d-%H%M%S).tar.gz"
+  # -a keeps the uid/gid recorded in the archive so the server can still
+  # write its own files.
+  gzip -dc "$file" | docker cp -a - "$CONTAINER:/"
+  step "Restored $file"
+  if $was_running; then
+    compose up -d --wait
+    print_addresses
+  else
+    echo "Start the server with: ./my-tes3mp host"
+  fi
+}
+
+cmd_deploy() {
+  exec "$ROOT/scripts/deploy.sh" "$@"
+}
+
+cmd_setup() {
+  exec "$ROOT/scripts/client-setup.sh" "$@"
+}
+
+cmd_help() {
+  cat <<EOF
+${B}my-tes3mp${N} — Morrowind multiplayer (TES3MP 0.8.1), hosted in Docker
+
+${B}Usage:${N} ./my-tes3mp [command]
+
+${B}Play${N}
+  play                    Start the server if needed, then launch Morrowind
+                          connected to it. This is the default command.
+  join HOST[:PORT]        Connect to a server somewhere else
+                          (--password PW if it has one).
+  setup                   Only install the game client and write its config.
+
+${B}Server${N}
+  host                    Start the server in the background.
+  stop                    Stop it. The world and characters are kept.
+  restart                 Restart it (after editing .env use 'host' instead).
+  status                  Show whether it is running and how to reach it.
+  logs [-f]               Show server logs (-f to follow).
+  shell                   Open a shell inside the server container.
+  update                  Rebuild the image and restart.
+
+${B}Data${N}
+  backup [FILE]           Save the world and characters to backups/.
+  restore FILE            Replace the world and characters from a backup.
+
+${B}Other machines${N}
+  deploy [USER@]HOST      Start the server on a remote machine over SSH.
+                          It only needs Docker; see 'deploy --help'.
+
+Settings (server name, port, password, ...) live in .env — copy .env.example.
+EOF
+}
+
+main() {
+  local cmd=${1:-play}
+  [ $# -gt 0 ] && shift
+  case $cmd in
+    play) cmd_play "$@" ;;
+    join | connect) cmd_join "$@" ;;
+    setup) cmd_setup "$@" ;;
+    host | up | start | server) cmd_host "$@" ;;
+    stop | down) cmd_stop "$@" ;;
+    restart) cmd_restart "$@" ;;
+    status | ps) cmd_status "$@" ;;
+    logs) cmd_logs "$@" ;;
+    shell | sh) cmd_shell "$@" ;;
+    update | upgrade) cmd_update "$@" ;;
+    backup) cmd_backup "$@" ;;
+    restore) cmd_restore "$@" ;;
+    deploy) cmd_deploy "$@" ;;
+    help | -h | --help) cmd_help ;;
+    *) die "unknown command '$cmd' — try: ./my-tes3mp help" ;;
+  esac
+}
+
+main "$@"
