@@ -39,7 +39,9 @@ vendors.busySeconds = 600
 local STATE_FILE = "custom/myTes3mpVendors.json"
 local state = { stock = {} }
 
--- In memory only: [cell .. "|" .. uniqueIndex] = { time = os.time(), pid = N }
+-- In memory only, keyed by cell .. "|" .. uniqueIndex:
+--   lastRefresh[key] = os.time() of the last time he was put in order
+--   lastOpen[key]    = { [pid] = os.time() that player last opened his barter screen }
 local lastRefresh = {}
 local lastOpen = {}
 
@@ -131,8 +133,18 @@ vendors.OnBarter = function(pid, cellDescription, uniqueIndex)
 
     local key = cellDescription .. "|" .. uniqueIndex
     local now = os.time()
-    local opened = lastOpen[key]
-    lastOpen[key] = { time = now, pid = pid }
+    -- Is somebody else possibly still trading with him? Each player's last
+    -- opening is kept separately, so that opening the screen again does not
+    -- make a player forget that the other one was there first.
+    local opens = lastOpen[key] or {}
+    local busy = false
+    for otherPid, openedAt in pairs(opens) do
+        if otherPid ~= pid and now - openedAt < vendors.busySeconds then
+            busy = true
+        end
+    end
+    opens[pid] = now
+    lastOpen[key] = opens
 
     if type(state.stock[cellDescription]) ~= "table" then
         state.stock[cellDescription] = {}
@@ -150,7 +162,7 @@ vendors.OnBarter = function(pid, cellDescription, uniqueIndex)
     if now - (lastRefresh[key] or 0) < vendors.stockSeconds then
         return
     end
-    if opened ~= nil and opened.pid ~= pid and now - opened.time < vendors.busySeconds then
+    if busy then
         return
     end
     lastRefresh[key] = now

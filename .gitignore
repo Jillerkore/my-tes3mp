@@ -7,6 +7,9 @@
 # World/character snapshots made by `./my-tes3mp backup`
 backups/
 
+# Upstream CoreScripts fetched by tests/run.sh
+tests/.cache/
+
 # Never commit game data or release archives. Morrowind's files are
 # copyrighted and must come from each player's own copy of the game.
 *.esm
