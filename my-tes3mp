@@ -249,7 +249,8 @@ ${B}Other machines${N}
   deploy [USER@]HOST      Start the server on a remote machine over SSH.
                           It only needs Docker; see 'deploy --help'.
 
-Settings (server name, port, password, ...) live in .env — copy .env.example.
+Settings (server name, port, password, game rules, ...) live in .env — copy
+.env.example. 'version' prints the release you are running.
 EOF
 }
 
@@ -270,6 +271,7 @@ main() {
     backup) cmd_backup "$@" ;;
     restore) cmd_restore "$@" ;;
     deploy) cmd_deploy "$@" ;;
+    version | -v | --version) echo "my-tes3mp $(cat "$ROOT/VERSION" 2>/dev/null || echo unknown)" ;;
     help | -h | --help) cmd_help ;;
     *) die "unknown command '$cmd' — try: ./my-tes3mp help" ;;
   esac

@@ -210,6 +210,8 @@ COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 # Scripts my-tes3mp adds on top of CoreScripts; the entrypoint installs them
 # into /data/scripts/custom/myTes3mp/ on every start.
 COPY docker/custom /opt/tes3mp/my-tes3mp/custom
+# The my-tes3mp release number, printed at start-up.
+COPY VERSION /opt/tes3mp/my-tes3mp/VERSION
 
 # Fail the build - not the first start - if the binary cannot find a library.
 RUN LD_LIBRARY_PATH=/opt/tes3mp/lib ldd /opt/tes3mp/tes3mp-server.x86_64 > /tmp/ldd.txt \

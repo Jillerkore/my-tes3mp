@@ -1,4 +1,4 @@
-name: Publish image
+name: Publish
 
 # Pushes the server image to the GitHub Container Registry:
 #   ghcr.io/<owner>/my-tes3mp:latest   on every push to main
@@ -6,6 +6,10 @@ name: Publish image
 #
 # Hosts can then skip the local build by setting, in .env:
 #   TES3MP_IMAGE=ghcr.io/<owner>/my-tes3mp:latest
+#
+# A v1.2.3 tag also becomes a GitHub Release, with that version's section of
+# CHANGELOG.md as its notes. Cutting a release is: update VERSION and
+# CHANGELOG.md, commit, `git tag v$(cat VERSION)`, push the commit and the tag.
 
 on:
   push:
@@ -14,7 +18,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -49,3 +53,32 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag matches the VERSION file
+        run: test "v$(cat VERSION)" = "$GITHUB_REF_NAME"
+
+      - name: Release notes from the changelog
+        run: |
+          version=$(cat VERSION)
+          awk -v heading="## $version" '
+            $0 == heading { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md
+          {
+            echo
+            echo "Server image: \`ghcr.io/${GITHUB_REPOSITORY,,}:$version\`"
+          } >> notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "my-tes3mp $(cat VERSION)" --notes-file notes.md
