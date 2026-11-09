@@ -33,7 +33,19 @@ and one switch in `.env` that turns it off:
 | `challenge.lua` | tougher enemies that keep up with the party | `TES3MP_CHALLENGE` |
 | `vendors.lua` | merchant gold and stock come back | `TES3MP_VENDOR_GOLD_MINUTES`, `TES3MP_VENDOR_STOCK_SECONDS` |
 | `uniques.lua` | artifacts once per player | `TES3MP_UNIQUE_CLAIMS`, `TES3MP_UNIQUE_RESPAWN_MINUTES` |
-| `startupRefs.lua`, `uniqueItems.lua` | data generated from the game files | — |
+| `combat.lua` | who is in a fight (a helper for the scripts below) | loaded when one of them needs it |
+| `regen.lua` | health and magicka return out of combat | `TES3MP_REGEN` |
+| `downed.lua` | a fallen player can be revived by another | `TES3MP_DOWNED_SECONDS` |
+| `travel.lua` | travel network, `/goto`, `/party` | `TES3MP_TRAVEL` |
+| `bank.lua` | `/bank` and `/vault` | `TES3MP_BANK` |
+| `sharequest.lua` | `/sharequest` | `TES3MP_SHARE_QUESTS` |
+| `bosses.lua` | world bosses with a reward for everyone present | `TES3MP_WORLD_BOSS_HOURS` |
+| `startupRefs.lua`, `uniqueItems.lua`, `travelPoints.lua` | data generated from the game files | — |
+
+Scripts talk to each other through a few globals, each set by the script
+that owns it and nil when that script is switched off — always check for nil:
+`myTes3mpResets` (keep-lists, `Hasten`, reset listeners), `myTes3mpCombat`
+(`InCombat`), `myTes3mpDowned` (`IsDowned`).
 
 When adding a feature, keep to that shape: a new file, a header, a switch, a
 test. If a feature seems to need a change inside CoreScripts, look for an
@@ -89,6 +101,10 @@ published image) replaces the image. On the next start the container:
 
 The world and characters in `data/` are never touched by an update. State
 that my-tes3mp keeps for itself lives in `data/custom/myTes3mp*.json`.
+
+The container also saves `data/` to `backups/` in the same volume before the
+server starts and on a schedule (`TES3MP_BACKUP_HOURS`), so an update that
+goes wrong can be undone with `./my-tes3mp restore NAME`.
 
 ## Tests
 

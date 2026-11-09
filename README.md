@@ -84,8 +84,9 @@ no other plugins enabled.
 | `./my-tes3mp stop` | Stop the server; the world and characters are kept |
 | `./my-tes3mp status` | Is it running, and at which addresses |
 | `./my-tes3mp logs -f` | Follow the server log |
-| `./my-tes3mp backup` | Save the world and characters to `backups/` |
-| `./my-tes3mp restore FILE` | Bring a backup back |
+| `./my-tes3mp backup` | Save everything to `backups/` on this machine |
+| `./my-tes3mp backups` | List the backups the server makes by itself, daily |
+| `./my-tes3mp restore FILE` | Bring a backup back: a file, or a name from `backups` |
 | `./my-tes3mp update` | Rebuild the image and restart |
 | `./my-tes3mp deploy USER@HOST` | Run the server on another machine over SSH |
 | `./my-tes3mp help` | Everything else |
@@ -115,6 +116,15 @@ apply.
 | `TES3MP_VENDOR_STOCK_SECONDS` | `15` | Seconds until a merchant's wares are back; `0` = never |
 | `TES3MP_UNIQUE_CLAIMS` | `true` | Artifacts and unique items can be taken once per player |
 | `TES3MP_UNIQUE_RESPAWN_MINUTES` | `30` | How soon a claimed item's cell resets for the players still missing it |
+| `TES3MP_SHARE_MAP` | `true` | What one player explores shows on everyone's map |
+| `TES3MP_REGEN` | `true` | Health and magicka return by themselves out of combat |
+| `TES3MP_DOWNED_SECONDS` | `60` | How long a fallen player can be revived by another; `0` = no downed state |
+| `TES3MP_TRAVEL` | `true` | Travel network, `/goto`, `/party` |
+| `TES3MP_BANK` | `true` | `/bank` and `/vault` |
+| `TES3MP_SHARE_QUESTS` | `true` | `/sharequest` |
+| `TES3MP_WORLD_BOSS_HOURS` | `3` | Real hours between world bosses; `0` = none |
+| `TES3MP_BACKUP_HOURS` | `24` | Hours between the server's own backups; `0` = none |
+| `TES3MP_BACKUP_KEEP` | `7` | How many of those to keep |
 | `TES3MP_LOG_LEVEL` | `1` | 0 verbose … 4 fatal only |
 | `TES3MP_IMAGE` | `my-tes3mp-server:0.8.1` | A registry image to run instead of building; fetch it with `docker compose pull` |
 | `MORROWIND_DATA` | *(auto-detected)* | Path to Morrowind's `Data Files` (client only) |
@@ -187,15 +197,16 @@ control every `config.share*` option yourself in `scripts/config.lua`.
 Morrowind gets easier the further you get, and two players make it easier
 still. `TES3MP_CHALLENGE` pushes back:
 
-| Preset | Enemy health | Damage you take | Meant for |
-| --- | --- | --- | --- |
-| `off` | unchanged | unchanged | the original game |
-| `normal` | ×1.25, +3% per level | unchanged at first, growing slowly | a relaxed pair |
-| `hard` | ×1.5, +5% per level | clearly more, growing with your level | two people fighting side by side |
-| `brutal` | ×2, +8% per level | a lot more | people who want to plan every fight |
+| Preset | Enemy health | With a second player there | Damage you take | Meant for |
+| --- | --- | --- | --- | --- |
+| `off` | unchanged | unchanged | unchanged | the original game |
+| `normal` | ×1.25, +3% per level | a quarter more | unchanged at first, growing slowly | a relaxed pair |
+| `hard` | ×1.5, +5% per level | half as much again | clearly more, growing with your level | two people fighting side by side |
+| `brutal` | ×2, +8% per level | three quarters more | a lot more | people who want to plan every fight |
 
-Health follows the highest-level player online; the damage you take follows
-your own level. TES3MP cannot change an existing NPC's level or skills over
+Health follows the highest-level player online, and how many of you are in
+the cell when an enemy is first met — an errand alone is lighter than a
+dungeon together. The damage you take follows your own level. TES3MP cannot change an existing NPC's level or skills over
 the network, so this is done with health and with the game's own difficulty
 setting, which amounts to the same thing in a fight.
 
@@ -211,6 +222,53 @@ A merchant's gold is back within a minute and his wares within fifteen
 seconds of your last visit — things you sold him are gone again by then.
 Artifacts are the exception: one that has been bought is not put back on the
 shelf.
+
+### Co-op comforts
+
+Borrowed from how Elder Scrolls Online plays, each with its own switch:
+
+- **Regeneration.** Out of combat your health is back in about a minute and a
+  half and your magicka in about three. In a fight, nothing. (Characters born
+  under the Atronach still get no magicka back — that is the sign's bargain.)
+- **Downed, not dead.** If you fall while your brother is online you lie
+  where you fell for a minute. If he reaches you and activates you, you get
+  up on the spot with a quarter of your health and no penalty. If he does
+  not — or you type `/giveup` — you die the ordinary way: temple or shrine,
+  and the usual days in recovery.
+- **Travel network.** Every silt strider port, harbour and Mages Guild hall
+  is a travel point; come near one once and it is yours. `/travel` lists
+  them and takes you to the one you pick — free when you are at a travel
+  point, 10 gold per level (at least 25) from anywhere else.
+- **Finding each other.** `/goto NAME` takes you to another player for free,
+  once a minute; `/party` shows everyone's level, health and whereabouts.
+  Going to a brother who is down always works, even mid-fight.
+- **Bank and family vault.** `/bank` opens a chest only you can use, `/vault`
+  one you all share, from anywhere. Handing your brother an artifact through
+  the vault does not use up his claim.
+- **Shared quests.** Journals stay separate, but `/sharequest` offers one of
+  your quests to the others. Whoever says yes gets your entries for it, and
+  from then on that quest moves forward for all of you.
+- **World bosses.** Once one of you is level 5, every three hours something
+  large turns up at one of the travel points and everyone is told where
+  (`/boss` reminds you). Everyone who fought it gets his own gold and an item
+  when it falls; nobody fights over a corpse. Unclaimed after two hours, it
+  wanders off.
+- **Shared map.** What one of you explores appears on both maps.
+
+Travel, the bank and the vault wait until you have been out of combat for
+ten seconds — the one exception being a `/goto` to rescue someone.
+
+| In game | |
+| --- | --- |
+| `/travel` | Travel to a point you have discovered |
+| `/goto NAME` | Go to another player |
+| `/party` | Everyone's level, health and location |
+| `/bank`, `/vault` | Your own store; the shared one |
+| `/sharequest`, `/unsharequest` | Share one quest; stop sharing it |
+| `/boss` | Is a world boss about, and where |
+| `/giveup` | Stop waiting to be revived |
+| `/uniques` | The artifacts you have claimed |
+| `/resetinfo` | What a reset will do to the cell you are in |
 
 ### Strongholds
 
@@ -288,7 +346,8 @@ Then everyone joins with `./my-tes3mp join my-server`.
 | Server settings | `.env` |
 | Game client | `.runtime/` in this checkout (delete it to reinstall) |
 | Client config, saves, logs | `~/.config/openmw/` |
-| Backups | `backups/` |
+| Backups you make with `./my-tes3mp backup` | `backups/` in this checkout |
+| Backups the server makes by itself | `backups/` inside the data volume (`./my-tes3mp backups`) |
 
 The server is stock TES3MP with the stock
 [CoreScripts](https://github.com/TES3MP/CoreScripts). To change game rules
