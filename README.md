@@ -109,6 +109,12 @@ apply.
 | `TES3MP_CELL_RESET_HOURS` | `4` | Real hours until a visited cell is put back to its original state; `0` = never — see [The world heals](#the-world-heals) |
 | `TES3MP_CELL_RESET_KEEP` | *(none)* | More cells that never reset: names or parts of names, separated by `;` |
 | `TES3MP_DAY_MINUTES` | `10` | Real minutes per in-game day (stock TES3MP: about 45); `0` = leave alone |
+| `TES3MP_PARTY` | `true` | All players are allies automatically |
+| `TES3MP_CHALLENGE` | `hard` | `off`, `normal`, `hard` or `brutal` — see [Tougher together](#tougher-together) |
+| `TES3MP_VENDOR_GOLD_MINUTES` | `1` | Real minutes until a merchant's gold is back; `0` = the game's own 24 in-game hours |
+| `TES3MP_VENDOR_STOCK_SECONDS` | `15` | Seconds until a merchant's wares are back; `0` = never |
+| `TES3MP_UNIQUE_CLAIMS` | `true` | Artifacts and unique items can be taken once per player |
+| `TES3MP_UNIQUE_RESPAWN_MINUTES` | `30` | How soon a claimed item's cell resets for the players still missing it |
 | `TES3MP_LOG_LEVEL` | `1` | 0 verbose … 4 fatal only |
 | `TES3MP_IMAGE` | `my-tes3mp-server:0.8.1` | A registry image to run instead of building; fetch it with `docker compose pull` |
 | `MORROWIND_DATA` | *(auto-detected)* | Path to Morrowind's `Data Files` (client only) |
@@ -154,8 +160,57 @@ In game, `/resetinfo` says what will happen to the cell you are standing in. A
 moderator can reset a cell immediately with `/resetcell "Cell Name"`; to make
 yourselves moderators, see [Admin rights](#admin-rights).
 
+### Artifacts and unique items
+
+There is one Umbra in the world. With the world healing itself he comes back,
+which lets the second of you have the sword too — and would let the first of
+you collect another one every few hours. So each of the 271 artifacts and
+unique items of Morrowind, Tribunal and Bloodmoon can be taken from its
+original place **once per player**:
+
+- The first time you take one, it is yours, and the server tells you so.
+- You cannot take a fresh copy again; it is left for the next player. (Out
+  of a container the server simply refuses. Off the ground the game lets you
+  pick it up first, so it is taken back out of your pack a moment later.)
+- While another player still lacks it, the cell it came from resets after
+  half an hour instead of four, so nobody waits long for his turn.
+- Your own copy is never restricted. Drop it, store it, hand it to your
+  brother.
+
+`/uniques` in game lists what you have claimed.
+
 Set `TES3MP_PROGRESSION=shared` for stock party-style play, or `custom` to
 control every `config.share*` option yourself in `scripts/config.lua`.
+
+### Tougher together
+
+Morrowind gets easier the further you get, and two players make it easier
+still. `TES3MP_CHALLENGE` pushes back:
+
+| Preset | Enemy health | Damage you take | Meant for |
+| --- | --- | --- | --- |
+| `off` | unchanged | unchanged | the original game |
+| `normal` | ×1.25, +3% per level | unchanged at first, growing slowly | a relaxed pair |
+| `hard` | ×1.5, +5% per level | clearly more, growing with your level | two people fighting side by side |
+| `brutal` | ×2, +8% per level | a lot more | people who want to plan every fight |
+
+Health follows the highest-level player online; the damage you take follows
+your own level. TES3MP cannot change an existing NPC's level or skills over
+the network, so this is done with health and with the game's own difficulty
+setting, which amounts to the same thing in a fight.
+
+Everybody on the server is also in one party (`TES3MP_PARTY`): a stray swing
+or spell between you is not held against anyone, you do not break each
+other's sneaking, and kills you make together count for both of your quests.
+(Hitting another player is never a crime in TES3MP and never turns guards on
+you, party or not.)
+
+### Merchants
+
+A merchant's gold is back within a minute and his wares within fifteen
+seconds of your last visit — things you sold him are gone again by then.
+Artifacts are the exception: one that has been bought is not put back on the
+shelf.
 
 ### Strongholds
 
@@ -285,17 +340,24 @@ checksum either way, so this normally only costs half a minute.
 ## Development
 
 ```bash
-make lint                      # shellcheck over every script
-docker compose up -d --build --wait && docker compose logs
+make lint    # shellcheck over every script
+make test    # Lua unit tests against the pinned CoreScripts
+make bump    # move to the newest upstream CoreScripts commit
 ```
 
-CI runs the same on every push: it lints, builds the image, boots the server
-and checks that data survives a restart. Pushes to `main` and `v*` tags also
-publish the image to `ghcr.io/<owner>/my-tes3mp`.
+This project never edits upstream code: its game rules are ordinary
+CoreScripts custom scripts in [`docker/custom/myTes3mp/`](docker/custom/myTes3mp),
+one file and one `.env` switch per feature. That is what makes upstream
+updates a one-line change. [docs/MAINTAINING.md](docs/MAINTAINING.md) has the
+whole picture: how the layers fit, how upstream updates and releases are
+made, and how updates reach servers that are already running.
 
-To move to a newer TES3MP release, update the version, URL and checksum at
-the top of `docker/Dockerfile` (server, plus the CoreScripts commit) and
-`scripts/lib.sh` (client).
+CI lints, runs the unit tests, builds the image, boots the server and checks
+that data survives a restart on every push. A weekly job tests against
+upstream's newest CoreScripts and opens a pull request when there is
+something to take. Pushing a `v*` tag publishes the image to
+`ghcr.io/<owner>/my-tes3mp` and creates a GitHub Release from
+[CHANGELOG.md](CHANGELOG.md).
 
 If you fork this, replace `Jillerkore/my-tes3mp` in this README, in
 `install.sh` and in the image label in `docker/Dockerfile`.

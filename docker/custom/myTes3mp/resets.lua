@@ -39,6 +39,9 @@ resets.checkSeconds = 60
 -- burst of disk work and network packets.
 resets.maxPerSweep = 25
 
+-- Functions to call with the cell description after a cell has been reset.
+resets.listeners = {}
+
 -- Cells never reset, by exact description (lower case).
 resets.keepExact = {
     -- Character creation: the prison ship and the dock it lands at.
@@ -199,6 +202,15 @@ local function resetCell(pid, cellDescription)
     tes3mp.ClearCellsToReset()
     tes3mp.AddCellToReset(cellDescription)
     tes3mp.SendCellReset(pid, true)
+
+    -- And the other my-tes3mp scripts that keep notes about cells.
+    for _, listener in ipairs(resets.listeners) do
+        local ok, problem = pcall(listener, cellDescription)
+        if not ok then
+            tes3mp.LogMessage(enumerations.log.ERROR, "[my-tes3mp resets] A reset listener failed for " ..
+                cellDescription .. ": " .. tostring(problem))
+        end
+    end
 end
 
 local function anyOnlinePid()
@@ -318,6 +330,20 @@ customEventHooks.registerHandler("OnContainer", function(eventStatus, pid, cellD
     end
 end)
 
+-- Bring a cell's reset forward so that it happens at most this many seconds
+-- from now (still only once nobody has it loaded). Protected cells stay
+-- protected. Used by uniques.lua when somebody still needs an item from here.
+resets.Hasten = function(cellDescription, seconds)
+    if resets.resetSeconds <= 0 or resets.IsKept(cellDescription) then
+        return
+    end
+    local dueAt = os.time() + seconds
+    if state.timers[cellDescription] == nil or state.timers[cellDescription] > dueAt then
+        state.timers[cellDescription] = dueAt
+        unsaved = true
+    end
+end
+
 -- /resetinfo: what will happen to the cell you are standing in.
 resets.Info = function(pid, cmd)
     local cellDescription = Players[pid].data.location.cell
@@ -382,5 +408,8 @@ customEventHooks.registerHandler("OnServerExit", function(eventStatus)
         saveState()
     end
 end)
+
+-- For the other my-tes3mp scripts; nil when resets are switched off.
+myTes3mpResets = resets
 
 return resets

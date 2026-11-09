@@ -25,16 +25,25 @@
 # pristine copy inside the image only if it does not exist yet. Nothing that
 # already exists is ever overwritten, so edits survive restarts and upgrades.
 #
-# Upgrades. For the same reason a newer image does NOT update the scripts in
-# an existing volume; the entrypoint only warns when the versions differ. To
-# take the new image's scripts, move the old ones away and restart:
+# Upgrades. When a newer image carries newer scripts, an existing volume is
+# brought up to date automatically - provided nobody has edited the scripts
+# it was seeded with. That is checked against a list of checksums written at
+# seeding time (/data/.tes3mp-scripts.sha256). Your own additions do not count
+# as edits and are carried over: everything under scripts/custom/ and the
+# file scripts/customScripts.lua. The previous scripts are kept next to the
+# new ones as scripts.previous/ and lib.previous/.
+#
+# If the seeded scripts were edited (scripts/config.lua, say), nothing is
+# replaced; the entrypoint warns on every start and leaves the decision to
+# you. To take the new image's scripts then, move the old ones away and
+# restart:
 #
 #   docker compose exec server mv scripts scripts.old
 #   docker compose exec server mv lib lib.old
 #   docker compose restart server
 #
-# then re-apply your changes (scripts/config.lua, scripts/customScripts.lua,
-# scripts/custom/) from scripts.old. The world in data/ is never touched.
+# then re-apply your changes from scripts.old. The world in data/ is never
+# touched by any of this.
 #
 # Config. These settings are rewritten in /data/tes3mp-server.cfg from the
 # environment on every start; everything else in that file - including your
@@ -69,6 +78,20 @@
 #                             of names, separated by semicolons.
 #   TES3MP_DAY_MINUTES        real minutes per in-game day (default 10,
 #                             0 = leave the world's own time scale alone).
+#   TES3MP_PARTY              true (default): all players are allies.
+#   TES3MP_CHALLENGE          off, normal, hard (default) or brutal: how much
+#                             tougher enemies are than in the original game;
+#                             see docker/custom/myTes3mp/challenge.lua.
+#   TES3MP_VENDOR_GOLD_MINUTES   real minutes until a merchant's gold is back
+#                             (default 1, 0 = the game's own 24 in-game hours).
+#   TES3MP_VENDOR_STOCK_SECONDS  seconds until a merchant's wares are back
+#                             (default 15, 0 = never).
+#   TES3MP_UNIQUE_CLAIMS      true (default): every artifact and unique item
+#                             can be taken once per player; see
+#                             docker/custom/myTes3mp/uniques.lua.
+#   TES3MP_UNIQUE_RESPAWN_MINUTES  real minutes until a claimed item's cell
+#                             resets for the players who still need it
+#                             (default 30, 0 = wait for the normal reset).
 
 set -Eeuo pipefail
 
@@ -76,8 +99,16 @@ readonly INSTALL_DIR=/opt/tes3mp
 readonly DATA_DIR=/data
 readonly CFG_FILE=$DATA_DIR/tes3mp-server.cfg
 readonly VERSION_STAMP=$DATA_DIR/.tes3mp-version
+readonly SCRIPTS_MANIFEST=$DATA_DIR/.tes3mp-scripts.sha256
 readonly SERVER_PORT=25565
 readonly IMAGE_VERSION=${TES3MP_VERSION:-unknown}
+# The my-tes3mp release this image was built from.
+if [[ -r /opt/tes3mp/my-tes3mp/VERSION ]]; then
+    PROJECT_VERSION=$(</opt/tes3mp/my-tes3mp/VERSION)
+else
+    PROJECT_VERSION=unknown
+fi
+readonly PROJECT_VERSION
 # What scripts/ is seeded from: the TES3MP release plus the CoreScripts commit.
 readonly SCRIPTS_VERSION="$IMAGE_VERSION+${CORESCRIPTS_COMMIT:-bundled}"
 readonly MANAGED_SRC=$INSTALL_DIR/my-tes3mp/custom/myTes3mp
@@ -108,6 +139,28 @@ require_printable() {
     if [[ $value == *[[:cntrl:]]* ]]; then
         die "$name must not contain line breaks or other control characters"
     fi
+}
+
+# read_bool NAME DEFAULT - print true or false for a yes/no setting.
+read_bool() {
+    local name=$1 value
+    value=$(trim "${!name:-}")
+    value=${value:-$2}
+    case ${value,,} in
+        true | yes | on | 1) echo true ;;
+        false | no | off | 0) echo false ;;
+        *) die "$name must be true or false (got '$value')" ;;
+    esac
+}
+
+# read_number NAME DEFAULT UNIT - print a whole number from 0 to 9999.
+read_number() {
+    local name=$1 value
+    value=$(trim "${!name:-}")
+    value=${value:-$2}
+    [[ $value =~ ^(0|[1-9][0-9]{0,3})$ ]] ||
+        die "$name must be a whole number of $3 from 0 (off) to 9999 (got '$value')"
+    echo "$value"
 }
 
 load_settings() {
@@ -160,6 +213,21 @@ load_settings() {
 
     CELL_RESET_KEEP=${TES3MP_CELL_RESET_KEEP:-}
     require_printable TES3MP_CELL_RESET_KEEP "$CELL_RESET_KEEP"
+
+    PARTY=$(read_bool TES3MP_PARTY true)
+    UNIQUE_CLAIMS=$(read_bool TES3MP_UNIQUE_CLAIMS true)
+
+    CHALLENGE=$(trim "${TES3MP_CHALLENGE:-}")
+    CHALLENGE=${CHALLENGE,,}
+    CHALLENGE=${CHALLENGE:-hard}
+    case $CHALLENGE in
+        off | normal | hard | brutal) ;;
+        *) die "TES3MP_CHALLENGE must be off, normal, hard or brutal (got '$CHALLENGE')" ;;
+    esac
+
+    VENDOR_GOLD_MINUTES=$(read_number TES3MP_VENDOR_GOLD_MINUTES 1 "minutes")
+    VENDOR_STOCK_SECONDS=$(read_number TES3MP_VENDOR_STOCK_SECONDS 15 "seconds")
+    UNIQUE_RESPAWN_MINUTES=$(read_number TES3MP_UNIQUE_RESPAWN_MINUTES 30 "minutes")
 
     DAY_MINUTES=$(trim "${TES3MP_DAY_MINUTES:-}")
     DAY_MINUTES=${DAY_MINUTES:-10}
@@ -216,6 +284,47 @@ seed_cfg() {
     mv "$staging" "$CFG_FILE"
 }
 
+# Checksums of the seeded scripts, leaving out what belongs to the admin:
+# scripts/custom/ and scripts/customScripts.lua.
+scripts_manifest() {
+    (
+        cd "$DATA_DIR"
+        find scripts lib -type f \
+            ! -path 'scripts/custom/*' ! -path 'scripts/customScripts.lua' -print0 |
+            LC_ALL=C sort -z | xargs -0 -r sha256sum
+    )
+}
+
+# Replace scripts/ and lib/ with the image's, keeping the admin's additions.
+# Only called when the seeded scripts are known to be unmodified.
+upgrade_scripts() {
+    local from=$1 name
+    log "Updating $DATA_DIR/scripts and $DATA_DIR/lib from $from to $SCRIPTS_VERSION (the old ones are kept as *.previous)"
+
+    for name in scripts lib; do
+        rm -rf "$DATA_DIR/.$name.upgrading"
+        cp -a "$INSTALL_DIR/server/$name" "$DATA_DIR/.$name.upgrading"
+    done
+
+    # Carry over what the admin added.
+    if [[ -d $DATA_DIR/scripts/custom ]]; then
+        rm -rf "$DATA_DIR/.scripts.upgrading/custom"
+        cp -a "$DATA_DIR/scripts/custom" "$DATA_DIR/.scripts.upgrading/custom"
+    fi
+    if [[ -f $DATA_DIR/scripts/customScripts.lua ]]; then
+        cp -a "$DATA_DIR/scripts/customScripts.lua" "$DATA_DIR/.scripts.upgrading/customScripts.lua"
+    fi
+
+    for name in scripts lib; do
+        rm -rf "$DATA_DIR/$name.previous"
+        mv "$DATA_DIR/$name" "$DATA_DIR/$name.previous"
+        mv "$DATA_DIR/.$name.upgrading" "$DATA_DIR/$name"
+    done
+
+    scripts_manifest >"$SCRIPTS_MANIFEST"
+    printf '%s\n' "$SCRIPTS_VERSION" >"$VERSION_STAMP"
+}
+
 seed_data() {
     if [[ ! -w $DATA_DIR ]]; then
         die "$DATA_DIR is not writable by uid $(id -u). If it is a bind mount, run on the host: sudo chown -R $(id -u):$(id -g) <that directory>"
@@ -225,20 +334,34 @@ seed_data() {
     seed_dir lib || true
     if seed_dir scripts; then
         printf '%s\n' "$SCRIPTS_VERSION" >"$VERSION_STAMP"
+        scripts_manifest >"$SCRIPTS_MANIFEST"
     fi
     seed_cfg
 
-    # Scripts written for one TES3MP version generally do not work with the
-    # server binary of another. Never fix that silently - the scripts may
-    # carry the admin's changes - but say clearly what to do.
+    # A volume seeded before these checksums existed can still be adopted, as
+    # long as its scripts are the very ones this image carries.
+    if [[ ! -e $SCRIPTS_MANIFEST && -r $VERSION_STAMP && $(<"$VERSION_STAMP") == "$SCRIPTS_VERSION" ]] &&
+        diff -rq -x custom -x customScripts.lua "$INSTALL_DIR/server/scripts" "$DATA_DIR/scripts" >/dev/null 2>&1 &&
+        diff -rq "$INSTALL_DIR/server/lib" "$DATA_DIR/lib" >/dev/null 2>&1; then
+        scripts_manifest >"$SCRIPTS_MANIFEST"
+    fi
+
+    # A newer image: bring the scripts along if they are still exactly what
+    # was seeded. If they carry the admin's changes, never replace them
+    # silently - say clearly what to do instead.
     local seeded_version=''
     if [[ -r $VERSION_STAMP ]]; then
         seeded_version=$(<"$VERSION_STAMP")
     fi
     if [[ -n $seeded_version && $seeded_version != "$SCRIPTS_VERSION" ]]; then
-        warn "$DATA_DIR/scripts was seeded from $seeded_version but this image carries $SCRIPTS_VERSION."
-        warn "Existing scripts are never overwritten. To take the new ones, move $DATA_DIR/scripts and"
-        warn "$DATA_DIR/lib away (e.g. to scripts.old, lib.old), restart, then re-apply your changes."
+        if [[ -r $SCRIPTS_MANIFEST ]] && scripts_manifest | cmp -s - "$SCRIPTS_MANIFEST"; then
+            upgrade_scripts "$seeded_version"
+        else
+            warn "$DATA_DIR/scripts was seeded from $seeded_version but this image carries $SCRIPTS_VERSION."
+            warn "The scripts there have been edited (or predate automatic updates), so they are left alone."
+            warn "To take the new ones, move $DATA_DIR/scripts and $DATA_DIR/lib away (e.g. to scripts.old,"
+            warn "lib.old), restart, then re-apply your changes."
+        fi
     fi
 }
 
@@ -324,8 +447,13 @@ install_managed_scripts() {
         esac
         printf '\nreturn {\n    progression = "%s",\n    strongholdHelper = %s,\n' \
             "$PROGRESSION" "$STRONGHOLD_HELPER"
-        printf '    cellResetHours = %s,\n    cellResetKeep = { %s },\n    dayMinutes = %s\n}\n' \
+        printf '    cellResetHours = %s,\n    cellResetKeep = { %s },\n    dayMinutes = %s,\n' \
             "$CELL_RESET_HOURS" "$(keep_list)" "$DAY_MINUTES"
+        printf '    party = %s,\n    challenge = "%s",\n' "$PARTY" "$CHALLENGE"
+        printf '    vendorGoldMinutes = %s,\n    vendorStockSeconds = %s,\n' \
+            "$VENDOR_GOLD_MINUTES" "$VENDOR_STOCK_SECONDS"
+        printf '    uniqueClaims = %s,\n    uniqueRespawnMinutes = %s\n}\n' \
+            "$UNIQUE_CLAIMS" "$UNIQUE_RESPAWN_MINUTES"
     } >"$staging/settings.lua"
 
     rm -rf "$MANAGED_DIR"
@@ -461,7 +589,8 @@ run_server() {
     if [[ -n $PASSWORD ]]; then
         password_state='password set'
     fi
-    log "Starting TES3MP $IMAGE_VERSION: name \"$SERVER_NAME\", up to $MAX_PLAYERS players, $password_state, public listing $MASTER_ENABLED, $PROGRESSION progression, cell resets ${CELL_RESET_HOURS}h, day ${DAY_MINUTES}min"
+    log "my-tes3mp $PROJECT_VERSION"
+    log "Starting TES3MP $IMAGE_VERSION: name \"$SERVER_NAME\", up to $MAX_PLAYERS players, $password_state, public listing $MASTER_ENABLED, $PROGRESSION progression, cell resets ${CELL_RESET_HOURS}h, day ${DAY_MINUTES}min, challenge $CHALLENGE"
 
     # The release bundles the Boost version it was built against.
     export LD_LIBRARY_PATH=$INSTALL_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
