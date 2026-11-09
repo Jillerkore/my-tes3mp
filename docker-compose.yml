@@ -32,7 +32,10 @@ services:
     ports:
       # TES3MP is UDP only. The container always listens on 25565; change the
       # host side with TES3MP_PORT.
-      - "${TES3MP_PORT:-25565}:25565/udp"
+      # TES3MP_BIND limits which address of the host it listens on (default:
+      # all). Docker-published ports bypass the host firewall, so a server that
+      # is only for the local network should be bound to that network's address.
+      - "${TES3MP_BIND:-0.0.0.0}:${TES3MP_PORT:-25565}:25565/udp"
 
     environment:
       # Written into /data/tes3mp-server.cfg on every start by
@@ -80,6 +83,17 @@ services:
     # for its master-server announcer to wake from a 10 s sleep ([MasterServer]
     # rate in the cfg). Docker's default grace period is 10 s; leave room.
     stop_grace_period: 30s
+
+    # A hard memory ceiling, so a leak in the server or a script can never take
+    # the host down with it: past the limit the kernel kills the container and
+    # `restart: unless-stopped` starts it again (the world is in the volume and
+    # is saved as it goes). Swap is off for the container (memswap_limit equal
+    # to mem_limit), so a leaking server dies promptly instead of crawling.
+    # The server normally needs a few hundred MB; 5g leaves ample room; change the ceiling with
+    # TES3MP_MEMORY_LIMIT (for example 2g or 8g). pids_limit stops a runaway fork.
+    mem_limit: ${TES3MP_MEMORY_LIMIT:-5g}
+    memswap_limit: ${TES3MP_MEMORY_LIMIT:-5g}
+    pids_limit: 512
 
     # An internet-facing game server needs no privileges at all.
     cap_drop:
