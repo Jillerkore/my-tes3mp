@@ -55,6 +55,11 @@ report("P3b capped at 5x", Ch.HealthMultiplier() == 5)
 Players[2].data.stats = nil
 report("P3c a player without a stats table counts as level 1", pcall(Ch.HealthMultiplier))
 setup("hard"); report("P3d nobody online: level 1", math.abs(Ch.HealthMultiplier() - 1.5) < 1e-9)
+report("P3e one player in the cell is the same as leaving the number out", Ch.HealthMultiplier(1) == Ch.HealthMultiplier())
+report("P3f hard: half as much again for a second player in the cell", math.abs(Ch.HealthMultiplier(2) - 2.25) < 1e-9, Ch.HealthMultiplier(2))
+report("P3g hard: and again for a third", math.abs(Ch.HealthMultiplier(3) - 3.0) < 1e-9, Ch.HealthMultiplier(3))
+report("P3h the group bonus is capped like everything else", Ch.HealthMultiplier(50) == 5)
+report("P3i an empty or odd count counts as one player", Ch.HealthMultiplier(0) == Ch.HealthMultiplier() and Ch.HealthMultiplier("x") == Ch.HealthMultiplier())
 
 ------------------------------------------------------------ the polling tick
 setup("hard")
@@ -66,13 +71,14 @@ report("C1b every tick restarts the timer", T.timers[id].restarts == 2)
 setup("hard"); T.player(1, "Alice"); T.player(2, "Bob"); T.visit(1, CELL); T.visit(2, CELL)
 enemy("10-0", 100, 100)
 tick()
-report("C2 a healthy enemy gets exactly one 'SetHealth 150' for exactly that actor, in its cell",
-  #T.cmds == 1 and T.cmds[1].cmd == "SetHealth 150" and #T.cmds[1].ids == 1 and T.cmds[1].ids[1] == "10-0" and T.cmds[1].cell == CELL)
+-- Two players have the cell loaded: 100 * 1.5 (hard, level 1) * 1.5 (one extra player).
+report("C2 a healthy enemy gets exactly one 'SetHealth 225' for exactly that actor, in its cell",
+  #T.cmds == 1 and T.cmds[1].cmd == "SetHealth 225" and #T.cmds[1].ids == 1 and T.cmds[1].ids[1] == "10-0" and T.cmds[1].cell == CELL)
 report("C3 sent to the cell's authority (the first visitor), not to the other player", T.cmds[1].pid == 1)
 tick(); tick()
 report("C4 further ticks do not command the same enemy again", #T.cmds == 1)
-report("C5 the marker is stored in the cell data and the cell saved", LoadedCells[CELL].data.objectData["10-0"].myTes3mpChallenge == 1.5
-  and T.cellOnDisk(CELL).objectData["10-0"].myTes3mpChallenge == 1.5)
+report("C5 the marker is stored in the cell data and the cell saved", LoadedCells[CELL].data.objectData["10-0"].myTes3mpChallenge == 2.25
+  and T.cellOnDisk(CELL).objectData["10-0"].myTes3mpChallenge == 2.25)
 report_stats("10-0", 150, 150); tick()
 report("C6 the report that follows SetHealth (base 150) is ignored", #T.cmds == 1)
 -- authority changes: still once

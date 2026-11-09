@@ -92,6 +92,27 @@
 #   TES3MP_UNIQUE_RESPAWN_MINUTES  real minutes until a claimed item's cell
 #                             resets for the players who still need it
 #                             (default 30, 0 = wait for the normal reset).
+#   TES3MP_SHARE_MAP          true (default): what one player explores shows
+#                             on everybody's map (ignored with
+#                             TES3MP_PROGRESSION=custom).
+#   TES3MP_REGEN              true (default): health and magicka come back by
+#                             themselves out of combat; regen.lua.
+#   TES3MP_DOWNED_SECONDS     how long a fallen player can be revived by
+#                             another before he dies for good (default 60,
+#                             0 = no downed state); downed.lua.
+#   TES3MP_TRAVEL             true (default): the travel network, /goto and
+#                             /party; travel.lua.
+#   TES3MP_BANK               true (default): /bank and /vault; bank.lua.
+#   TES3MP_SHARE_QUESTS       true (default): /sharequest; sharequest.lua.
+#   TES3MP_WORLD_BOSS_HOURS   real hours between world bosses (default 3,
+#                             0 = none); bosses.lua.
+#
+# Backups. The world and characters (/data/data) are saved to
+# /data/backups/auto-<time>.tar.gz before the server starts and then every
+# TES3MP_BACKUP_HOURS hours (default 24, 0 = never); the newest
+# TES3MP_BACKUP_KEEP (default 7) are kept. They live in the same volume as the
+# world, so they guard against a ruined world, not against a lost volume -
+# `./my-tes3mp backup` copies everything out to the host for that.
 
 set -Eeuo pipefail
 
@@ -228,6 +249,19 @@ load_settings() {
     VENDOR_GOLD_MINUTES=$(read_number TES3MP_VENDOR_GOLD_MINUTES 1 "minutes")
     VENDOR_STOCK_SECONDS=$(read_number TES3MP_VENDOR_STOCK_SECONDS 15 "seconds")
     UNIQUE_RESPAWN_MINUTES=$(read_number TES3MP_UNIQUE_RESPAWN_MINUTES 30 "minutes")
+
+    SHARE_MAP=$(read_bool TES3MP_SHARE_MAP true)
+    REGEN=$(read_bool TES3MP_REGEN true)
+    TRAVEL=$(read_bool TES3MP_TRAVEL true)
+    BANK=$(read_bool TES3MP_BANK true)
+    SHARE_QUESTS=$(read_bool TES3MP_SHARE_QUESTS true)
+    DOWNED_SECONDS=$(read_number TES3MP_DOWNED_SECONDS 60 "seconds")
+    WORLD_BOSS_HOURS=$(read_number TES3MP_WORLD_BOSS_HOURS 3 "hours")
+    BACKUP_HOURS=$(read_number TES3MP_BACKUP_HOURS 24 "hours")
+    BACKUP_KEEP=$(read_number TES3MP_BACKUP_KEEP 7 "backups")
+    if ((BACKUP_KEEP < 1)); then
+        die "TES3MP_BACKUP_KEEP must be at least 1 (set TES3MP_BACKUP_HOURS=0 to switch backups off)"
+    fi
 
     DAY_MINUTES=$(trim "${TES3MP_DAY_MINUTES:-}")
     DAY_MINUTES=${DAY_MINUTES:-10}
@@ -445,6 +479,10 @@ install_managed_scripts() {
                 printf '%s\n' "-- TES3MP_PROGRESSION=custom: scripts/config.lua decides."
                 ;;
         esac
+        if [[ $PROGRESSION != custom ]]; then
+            printf '\n%s\n' "-- TES3MP_SHARE_MAP: the map is its own switch, whatever the progression mode."
+            printf 'config.shareMapExploration = %s\n' "$SHARE_MAP"
+        fi
         printf '\nreturn {\n    progression = "%s",\n    strongholdHelper = %s,\n' \
             "$PROGRESSION" "$STRONGHOLD_HELPER"
         printf '    cellResetHours = %s,\n    cellResetKeep = { %s },\n    dayMinutes = %s,\n' \
@@ -452,8 +490,12 @@ install_managed_scripts() {
         printf '    party = %s,\n    challenge = "%s",\n' "$PARTY" "$CHALLENGE"
         printf '    vendorGoldMinutes = %s,\n    vendorStockSeconds = %s,\n' \
             "$VENDOR_GOLD_MINUTES" "$VENDOR_STOCK_SECONDS"
-        printf '    uniqueClaims = %s,\n    uniqueRespawnMinutes = %s\n}\n' \
+        printf '    uniqueClaims = %s,\n    uniqueRespawnMinutes = %s,\n' \
             "$UNIQUE_CLAIMS" "$UNIQUE_RESPAWN_MINUTES"
+        printf '    regen = %s,\n    downedSeconds = %s,\n    travel = %s,\n    bank = %s,\n' \
+            "$REGEN" "$DOWNED_SECONDS" "$TRAVEL" "$BANK"
+        printf '    shareQuests = %s,\n    worldBossHours = %s\n}\n' \
+            "$SHARE_QUESTS" "$WORLD_BOSS_HOURS"
     } >"$staging/settings.lua"
 
     rm -rf "$MANAGED_DIR"
@@ -569,6 +611,56 @@ render_cfg() {
     mv "$staging" "$CFG_FILE"
 }
 
+# ---- Backups ---------------------------------------------------------------------
+
+readonly BACKUP_DIR=$DATA_DIR/backups
+
+# Seconds since the newest automatic backup was made; a huge number if there
+# is none.
+backup_age() {
+    local newest
+    newest=$(find "$BACKUP_DIR" -maxdepth 1 -name 'auto-*.tar.gz' -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1)
+    if [[ -z $newest ]]; then
+        echo 999999999
+    else
+        echo $(($(date +%s) - ${newest%.*}))
+    fi
+}
+
+# Save /data/data (the world and the characters) and drop the oldest backups
+# beyond BACKUP_KEEP.
+backup_once() {
+    local file
+    mkdir -p "$BACKUP_DIR"
+    file=$BACKUP_DIR/auto-$(date -u +%Y%m%d-%H%M%S).tar.gz
+
+    # tar exits 1 when a file changed while it was being read. With the server
+    # running that can happen and is fine: the files are small and each one is
+    # written in one go, so the copy is of one moment or the next.
+    local status=0
+    tar -C "$DATA_DIR" -czf "$file.partial" data || status=$?
+    if ((status > 1)); then
+        rm -f "$file.partial"
+        warn "Automatic backup failed (tar exit $status)"
+        return 1
+    fi
+    mv "$file.partial" "$file"
+
+    find "$BACKUP_DIR" -maxdepth 1 -name 'auto-*.tar.gz' -printf '%T@ %p\n' | sort -rn |
+        tail -n +$((BACKUP_KEEP + 1)) | cut -d' ' -f2- | xargs -r rm -f
+    log "Saved the world to $file"
+}
+
+# Runs next to the server for as long as the container lives: looks every ten
+# minutes whether the newest backup has become older than BACKUP_HOURS.
+backup_loop() {
+    while sleep 600; do
+        if (($(backup_age) >= BACKUP_HOURS * 3600)); then
+            backup_once || true
+        fi
+    done
+}
+
 # ---- Commands -------------------------------------------------------------------
 
 run_server() {
@@ -584,6 +676,15 @@ run_server() {
     manage MasterServer enabled "$MASTER_ENABLED"
     render_cfg
     install_managed_scripts
+
+    if ((BACKUP_HOURS > 0)); then
+        # One before the server starts, if the last one is old enough - the
+        # one moment nothing else is writing - then on a schedule.
+        if (($(backup_age) >= BACKUP_HOURS * 3600)); then
+            backup_once || true
+        fi
+        backup_loop &
+    fi
 
     local password_state='no password'
     if [[ -n $PASSWORD ]]; then

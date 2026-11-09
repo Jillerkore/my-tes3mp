@@ -42,6 +42,21 @@ resets.maxPerSweep = 25
 -- Functions to call with the cell description after a cell has been reset.
 resets.listeners = {}
 
+-- Functions asked, with the cell description, whether a cell must be left
+-- alone for now; one of them answering true puts the reset off until the
+-- next look. (A world boss standing in the cell, for instance.)
+resets.holders = {}
+
+local function isHeld(cellDescription)
+    for _, holder in ipairs(resets.holders) do
+        local ok, held = pcall(holder, cellDescription)
+        if ok and held == true then
+            return true
+        end
+    end
+    return false
+end
+
 -- Cells never reset, by exact description (lower case).
 resets.keepExact = {
     -- Character creation: the prison ship and the dock it lands at.
@@ -247,7 +262,7 @@ resets.Sweep = function()
         if count >= resets.maxPerSweep then
             break
         end
-        if LoadedCells[cellDescription] == nil then
+        if LoadedCells[cellDescription] == nil and not isHeld(cellDescription) then
             -- One cell that cannot be handled (an unreadable cell file, say)
             -- must not keep the others from their turn.
             local ok, problem = pcall(function()

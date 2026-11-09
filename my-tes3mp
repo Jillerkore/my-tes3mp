@@ -179,13 +179,54 @@ cmd_backup() {
   step "Saved $(du -h "$out" | cut -f1) to $out"
 }
 
+# Run a shell command with the data volume mounted at /data: inside the server
+# if it is running, otherwise in a throwaway container of the same image.
+in_volume() {
+  if server_running; then
+    compose exec -T server sh -c "$1"
+  else
+    compose run --rm --no-deps -T --entrypoint sh server -c "$1"
+  fi
+}
+
+# The backups the server makes by itself, newest first.
+cmd_backups() {
+  need_docker
+  local list
+  list=$(in_volume 'ls -1t /data/backups 2>/dev/null | grep "^auto-.*\.tar\.gz$" || true')
+  if [ -z "$list" ]; then
+    echo "No automatic backups yet. The server makes one before it starts and then"
+    echo "every TES3MP_BACKUP_HOURS hours (default 24)."
+    return 0
+  fi
+  echo "Automatic backups in the server's data volume, newest first:"
+  printf '%s\n' "$list" | sed 's/^/  /'
+  echo
+  echo "Bring one back with: ./my-tes3mp restore NAME"
+  echo "They hold the world and the characters. './my-tes3mp backup' saves everything to this machine."
+}
+
 cmd_restore() {
   need_docker
   local file=${1:-}
-  [ -n "$file" ] || die "usage: my-tes3mp restore BACKUP.tar.gz"
-  [ -f "$file" ] || die "no such file: $file"
-  gzip -t "$file" 2>/dev/null || die "$file is not a valid .tar.gz"
+  [ -n "$file" ] || die "usage: my-tes3mp restore BACKUP.tar.gz   (a file, or a name from './my-tes3mp backups')"
+
+  # A name like auto-20260101-120000.tar.gz that is not a file here means one
+  # of the server's own backups.
+  local automatic=false
+  if [ ! -f "$file" ] && [[ $file =~ ^auto-[0-9]{8}-[0-9]{6}\.tar\.gz$ ]]; then
+    automatic=true
+  elif [ ! -f "$file" ]; then
+    die "no such file: $file"
+  else
+    gzip -t "$file" 2>/dev/null || die "$file is not a valid .tar.gz"
+  fi
+
   container_exists || compose create >/dev/null
+  if $automatic; then
+    in_volume "test -f /data/backups/$file" || die "the server has no automatic backup called $file (see './my-tes3mp backups')"
+  fi
+
   if [ "${MY_TES3MP_YES:-}" != 1 ]; then
     printf 'This replaces the current world and all characters with %s.\nContinue? [y/N] ' "$file"
     local answer
@@ -199,9 +240,23 @@ cmd_restore() {
   fi
   step "Saving the current state first, in case you change your mind"
   cmd_backup "$ROOT/backups/before-restore-$(date +%Y%m%d-%H%M%S).tar.gz"
-  # -a keeps the uid/gid recorded in the archive so the server can still
-  # write its own files.
-  gzip -dc "$file" | docker cp -a - "$CONTAINER:/"
+
+  if $automatic; then
+    # Unpack next to the live data first, then swap, so that a broken archive
+    # cannot leave the server without a world.
+    in_volume "set -e
+      rm -rf /data/.restoring && mkdir /data/.restoring
+      tar -C /data/.restoring -xzf /data/backups/$file
+      test -d /data/.restoring/data
+      rm -rf /data/data && mv /data/.restoring/data /data/data
+      rmdir /data/.restoring"
+  else
+    # Clear out what is there (but keep the server's own backups), so that
+    # nothing newer than the archive is left behind, then unpack. -a keeps the
+    # uid/gid recorded in the archive so the server can still write its files.
+    in_volume 'find /data -mindepth 1 -maxdepth 1 ! -name backups -exec rm -rf {} +'
+    gzip -dc "$file" | docker cp -a - "$CONTAINER:/"
+  fi
   step "Restored $file"
   if $was_running; then
     compose up -d --wait
@@ -242,8 +297,10 @@ ${B}Server${N}
   update                  Rebuild the image and restart.
 
 ${B}Data${N}
-  backup [FILE]           Save the world and characters to backups/.
-  restore FILE            Replace the world and characters from a backup.
+  backup [FILE]           Save everything to backups/ on this machine.
+  backups                 List the backups the server makes by itself.
+  restore FILE|NAME       Replace the world and characters from a backup:
+                          a file made by 'backup', or a name from 'backups'.
 
 ${B}Other machines${N}
   deploy [USER@]HOST      Start the server on a remote machine over SSH.
@@ -269,6 +326,7 @@ main() {
     shell | sh) cmd_shell "$@" ;;
     update | upgrade) cmd_update "$@" ;;
     backup) cmd_backup "$@" ;;
+    backups) cmd_backups "$@" ;;
     restore) cmd_restore "$@" ;;
     deploy) cmd_deploy "$@" ;;
     version | -v | --version) echo "my-tes3mp $(cat "$ROOT/VERSION" 2>/dev/null || echo unknown)" ;;

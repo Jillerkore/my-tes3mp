@@ -54,6 +54,16 @@ services:
       TES3MP_VENDOR_STOCK_SECONDS: ${TES3MP_VENDOR_STOCK_SECONDS:-15}
       TES3MP_UNIQUE_CLAIMS: ${TES3MP_UNIQUE_CLAIMS:-true}
       TES3MP_UNIQUE_RESPAWN_MINUTES: ${TES3MP_UNIQUE_RESPAWN_MINUTES:-30}
+      TES3MP_SHARE_MAP: ${TES3MP_SHARE_MAP:-true}
+      TES3MP_REGEN: ${TES3MP_REGEN:-true}
+      TES3MP_DOWNED_SECONDS: ${TES3MP_DOWNED_SECONDS:-60}
+      TES3MP_TRAVEL: ${TES3MP_TRAVEL:-true}
+      TES3MP_BANK: ${TES3MP_BANK:-true}
+      TES3MP_SHARE_QUESTS: ${TES3MP_SHARE_QUESTS:-true}
+      TES3MP_WORLD_BOSS_HOURS: ${TES3MP_WORLD_BOSS_HOURS:-3}
+      # Automatic backups of the world, kept in the data volume.
+      TES3MP_BACKUP_HOURS: ${TES3MP_BACKUP_HOURS:-24}
+      TES3MP_BACKUP_KEEP: ${TES3MP_BACKUP_KEEP:-7}
 
     volumes:
       # Everything the server changes or that you may want to edit: the world

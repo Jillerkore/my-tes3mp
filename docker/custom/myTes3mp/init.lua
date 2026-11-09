@@ -14,6 +14,12 @@
 --   TES3MP_VENDOR_GOLD_MINUTES=0     merchant gold in vendors.lua
 --   TES3MP_VENDOR_STOCK_SECONDS=0    merchant stock in vendors.lua
 --   TES3MP_UNIQUE_CLAIMS=false       uniques.lua
+--   TES3MP_REGEN=false               regen.lua
+--   TES3MP_DOWNED_SECONDS=0          downed.lua
+--   TES3MP_TRAVEL=false              travel.lua
+--   TES3MP_BANK=false                bank.lua
+--   TES3MP_SHARE_QUESTS=false        sharequest.lua
+--   TES3MP_WORLD_BOSS_HOURS=0        bosses.lua
 --
 -- It is loaded by this line in scripts/customScripts.lua, which the container
 -- adds if it is missing:
@@ -22,18 +28,27 @@
 
 local settings = require("custom/myTes3mp/settings")
 
+local function number(value)
+    return tonumber(value) or 0
+end
+
 require("custom/myTes3mp/world")
 
 if settings.party then
     require("custom/myTes3mp/party")
 end
 
+-- Knows who is in a fight; several of the features below ask it.
+if settings.regen or settings.travel or settings.bank or number(settings.downedSeconds) > 0 then
+    require("custom/myTes3mp/combat")
+end
+
 if settings.strongholdHelper then
     require("custom/myTes3mp/strongholds")
 end
 
--- Before uniques: it brings resets forward through this one.
-if (tonumber(settings.cellResetHours) or 0) > 0 then
+-- Before uniques, bank and bosses: they hook into this one.
+if number(settings.cellResetHours) > 0 then
     require("custom/myTes3mp/resets")
 end
 
@@ -45,6 +60,30 @@ require("custom/myTes3mp/vendors")
 
 if settings.uniqueClaims then
     require("custom/myTes3mp/uniques")
+end
+
+if settings.regen then
+    require("custom/myTes3mp/regen")
+end
+
+if number(settings.downedSeconds) > 0 then
+    require("custom/myTes3mp/downed")
+end
+
+if settings.travel then
+    require("custom/myTes3mp/travel")
+end
+
+if settings.bank then
+    require("custom/myTes3mp/bank")
+end
+
+if settings.shareQuests then
+    require("custom/myTes3mp/sharequest")
+end
+
+if number(settings.worldBossHours) > 0 then
+    require("custom/myTes3mp/bosses")
 end
 
 return settings

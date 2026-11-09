@@ -1,7 +1,9 @@
 # Tests for the my-tes3mp server scripts
 
-Unit-level tests for the Lua scripts in `docker/custom/myTes3mp/` (strongholds,
-resets, world, challenge, vendors, uniques, party, and the loader `init.lua`).
+Unit-level tests for the Lua scripts in `docker/custom/myTes3mp/` - one suite
+per script (`test_<script>.lua`), one for the loader `init.lua`, and
+`test_integration.lua`, which loads everything at once the way the server does
+and plays stories that cross several scripts.
 They run the **unmodified scripts** under LuaJIT against the **real CoreScripts**
 at the commit pinned in `docker/Dockerfile`, with the game server itself faked.
 

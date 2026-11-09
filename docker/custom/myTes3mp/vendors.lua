@@ -205,6 +205,13 @@ if vendors.stockSeconds > 0 then
     end)
 end
 
+-- A player who has left is not trading with anybody.
+customEventHooks.registerHandler("OnPlayerDisconnect", function(eventStatus, pid)
+    for _, opens in pairs(lastOpen) do
+        opens[pid] = nil
+    end
+end)
+
 customEventHooks.registerHandler("OnServerPostInit", function(eventStatus)
     loadState()
 

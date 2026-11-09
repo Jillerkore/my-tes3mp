@@ -439,4 +439,29 @@ do
   report("K6 resets off: Hasten does nothing", pcall(R.Hasten, "Vivec, Temple", 10))
 end
 
+------------------------------------------------------------ holders (other scripts asking for a cell to be left alone)
+do
+  boot(); addPlayer(1,"a")
+  report("O1 holders table exists and starts empty", type(R.holders) == "table" and #R.holders == 0)
+  local held = { ["Balmora, Hodlismod"] = true }
+  table.insert(R.holders, function() error("holder boom") end)
+  table.insert(R.holders, function(cell) return held[cell] end)
+  cellLoad(1,"Balmora, Hodlismod"); cellUnload(1,"Balmora, Hodlismod")
+  cellLoad(1,"Balmora, Council Club"); cellUnload(1,"Balmora, Council Club")
+  B.time = B.time + 5*H
+  local ok, n = pcall(R.Sweep)
+  report("O2 a held cell is not reset when it comes due; the others are; a holder that throws is ignored",
+    ok and n == 1 and T.resetCount() == 1, tostring(n))
+  B.time = B.time + 60; MyTes3mpResetTick()
+  report("O3 the held cell keeps its clock, so it is looked at again", timers().timers["Balmora, Hodlismod"] ~= nil)
+  report("O4 still held at the next look: still not reset", T.resetCount() == 1)
+  held["Balmora, Hodlismod"] = nil
+  B.time = B.time + 60
+  report("O5 once nobody holds it any more it is reset at the next look", R.Sweep() == 1 and T.resetCount() == 2)
+  report("O6 a holder answering anything but true does not hold", (function()
+    boot(); addPlayer(1,"a"); table.insert(R.holders, function() return "yes" end)
+    cellLoad(1,"Balmora, Hodlismod"); cellUnload(1,"Balmora, Hodlismod"); B.time = B.time + 5*H
+    return R.Sweep() == 1 end)())
+end
+
 T.summary()

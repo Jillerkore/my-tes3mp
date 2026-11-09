@@ -7,9 +7,10 @@
 -- Morrowind gets easier the further you get, and two players make it easier
 -- still. This pushes back in the two ways a TES3MP server can:
 --
---   * Health. Everything that is not a player or a summon gets more health,
---     and the higher the highest-level player online, the more. A fight lasts
---     long enough to need both of you.
+--   * Health. Everything that is not a player or a summon gets more health:
+--     more the higher the highest-level player online, and more again for
+--     every extra player who is in the cell when the enemy is first met. An
+--     errand on your own stays doable; a dungeon together needs both of you.
 --   * Damage. Each player's difficulty setting rises with his own level. The
 --     game uses it to scale up the damage he takes, which is the closest
 --     thing the engine has to giving every enemy better skills. (It also
@@ -25,7 +26,8 @@
 -- script reads them for every cell somebody is in, and for each enemy it has
 -- not dealt with yet sends a console command for exactly that enemy
 -- ("SetHealth N") to the client that controls it. The enemy is marked as done
--- in the cell's data, so it happens once per enemy until the cell is reset.
+-- in the cell's data, so it happens once per enemy until the cell is reset -
+-- an enemy first met alone stays as it is if your brother walks in later.
 -- Sending health values directly would not work: a client ignores them for
 -- enemies it controls itself.
 
@@ -34,13 +36,18 @@ local settings = require("custom/myTes3mp/settings")
 local challenge = {}
 
 -- health:     multiplier at level 1, and how much it grows per player level
+-- group:      how much more for each player in the cell beyond the first
+--             (0.5 = half as much again with two players there)
 -- difficulty: the game's difficulty slider (-100..100) at level 1, growth per
 --             level, and where it stops. At 50 a player takes 3.5 times the
 --             damage and deals 0.9 times; at 100, 6 times and 0.8 times.
 challenge.presets = {
-    normal = { health = 1.25, healthPerLevel = 0.03, difficulty = 0,  difficultyPerLevel = 1, difficultyMax = 40 },
-    hard   = { health = 1.5,  healthPerLevel = 0.05, difficulty = 5,  difficultyPerLevel = 2, difficultyMax = 70 },
-    brutal = { health = 2.0,  healthPerLevel = 0.08, difficulty = 20, difficultyPerLevel = 3, difficultyMax = 100 }
+    normal = { health = 1.25, healthPerLevel = 0.03, group = 0.25,
+               difficulty = 0,  difficultyPerLevel = 1, difficultyMax = 40 },
+    hard   = { health = 1.5,  healthPerLevel = 0.05, group = 0.5,
+               difficulty = 5,  difficultyPerLevel = 2, difficultyMax = 70 },
+    brutal = { health = 2.0,  healthPerLevel = 0.08, group = 0.75,
+               difficulty = 20, difficultyPerLevel = 3, difficultyMax = 100 }
 }
 
 -- No enemy gets more than this many times its normal health.
@@ -59,10 +66,11 @@ local function levelOf(player)
     return 1
 end
 
--- Health multiplier for enemies met right now: set by the highest-level
--- player online, so nobody can keep a low-level character around to make the
--- world soft.
-challenge.HealthMultiplier = function()
+-- Health multiplier for enemies met right now. The level part is set by the
+-- highest-level player online, so nobody can keep a low-level character
+-- around to make the world soft. playersInCell is how many players have the
+-- enemy's cell loaded (1 when left out).
+challenge.HealthMultiplier = function(playersInCell)
     local preset = challenge.preset
     local highest = 1
     for _, player in pairs(Players) do
@@ -70,7 +78,9 @@ challenge.HealthMultiplier = function()
             highest = math.max(highest, levelOf(player))
         end
     end
-    return math.min(challenge.healthCap, preset.health + preset.healthPerLevel * (highest - 1))
+    local others = math.max(0, (tonumber(playersInCell) or 1) - 1)
+    local multiplier = (preset.health + preset.healthPerLevel * (highest - 1)) * (1 + preset.group * others)
+    return math.min(challenge.healthCap, multiplier)
 end
 
 challenge.DifficultyFor = function(level)
@@ -117,7 +127,7 @@ if challenge.preset ~= nil then
             return
         end
 
-        local multiplier = challenge.HealthMultiplier()
+        local multiplier = challenge.HealthMultiplier(cell:GetVisitorCount())
         local changed = false
 
         for _, uniqueIndex in pairs(cell.data.packets.statsDynamic) do

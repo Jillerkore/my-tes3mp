@@ -222,12 +222,14 @@ require("cell.base")
 _G.Cell = require("cell.json")
 
 ------------------------------------------------------------------ the scripts under test
-local MODULES = { "world", "party", "strongholds", "resets", "challenge", "vendors", "uniques",
-    "uniqueItems", "startupRefs" }
+local MODULES = { "world", "party", "combat", "strongholds", "resets", "challenge", "vendors", "uniques",
+    "regen", "downed", "travel", "bank", "sharequest", "bosses",
+    "uniqueItems", "startupRefs", "travelPoints" }
 
 T.DEFAULT_SETTINGS = { progression = "separate", strongholdHelper = true, cellResetHours = 4, cellResetKeep = {},
     dayMinutes = 10, party = true, challenge = "hard", vendorGoldMinutes = 1, vendorStockSeconds = 15,
-    uniqueClaims = true, uniqueRespawnMinutes = 30 }
+    uniqueClaims = true, uniqueRespawnMinutes = 30, regen = true, downedSeconds = 60, travel = true, bank = true,
+    shareQuests = true, worldBossHours = 3 }
 
 local function installModules(settings)
     for _, n in ipairs(MODULES) do
@@ -272,7 +274,7 @@ function T.fresh(settings, opts)
     for k, v in pairs(deepcopy(T.configDefaults)) do config[k] = v end
     config.dataPath = "/data"
     LoadedCells, Players = {}, {}
-    myTes3mpResets = nil
+    myTes3mpResets, myTes3mpCombat, myTes3mpDowned = nil, nil, nil
     for name in pairs(_G) do
         if type(name) == "string" and name:match("^MyTes3mp") then _G[name] = nil end
     end
